@@ -1,0 +1,19 @@
+[project]
+name = "chatffeur"
+version = "0.1.0"
+description = "AI-powered ride-booking agent with LangGraph and Streamlit"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.60",
+    "langchain-anthropic>=0.3.0",
+    "langchain-core>=0.3.0",
+    "streamlit>=1.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = []
