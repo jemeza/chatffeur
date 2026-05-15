@@ -55,18 +55,19 @@ def _build_llm():
         model="claude-sonnet-4-6",
         api_key=api_key,
         max_tokens=1024,
+        model_kwargs={"cache_control": {"type": "ephemeral"}},
     ).bind_tools(ALL_TOOLS)
 
 
 def _agent_node(state: AgentState):
     llm = _build_llm()
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state.messages
     response = llm.invoke(messages)
     return {"messages": [response]}
 
 
 def _should_continue(state: AgentState):
-    last = state["messages"][-1]
+    last = state.messages[-1]
     if getattr(last, "tool_calls", None):
         return "tools"
     return END

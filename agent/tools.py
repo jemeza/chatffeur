@@ -121,7 +121,7 @@ def search_rides(
         pickup:  Starting address or landmark (e.g. '123 Main St, New York').
         dropoff: Destination address or landmark (e.g. 'JFK Airport').
     """
-    platform = state.get("platform_adapter") or "uber"
+    platform = state.platform_adapter or "uber"
 
     try:
         adapter = _get_adapter(platform)
@@ -132,13 +132,16 @@ def search_rides(
             f"(~{r['duration_estimate_minutes']} min, up to {r['capacity']} passengers)"
             for i, r in enumerate(results)
         ]
-        content = f"Found {len(results)} ride options:\n" + "\n".join(summary_lines)
+        content = f"Found {len(results)} ride options:\n" + \
+            "\n".join(summary_lines)
 
         log = make_log_entry(
             "search_rides",
-            requested={"pickup": pickup, "dropoff": dropoff, "platform": platform},
+            requested={"pickup": pickup,
+                       "dropoff": dropoff, "platform": platform},
             verified={"adapter_available": True},
-            executed={"method": "search_rides", "pickup": pickup, "dropoff": dropoff},
+            executed={"method": "search_rides",
+                      "pickup": pickup, "dropoff": dropoff},
             outcome=f"found {len(results)} options",
         )
         return Command(
@@ -191,7 +194,7 @@ def suggest_ride(
         ride_index: Zero-based index into the list returned by search_rides.
         reasoning:  Short explanation of why this option was chosen.
     """
-    results = state.get("search_results") or []
+    results = state.search_results
 
     if not results:
         msg = "No search results available. Call search_rides first."
@@ -284,9 +287,9 @@ def book_ride(
     Book the ride that the user has already confirmed via suggest_ride.
     Will refuse to proceed if the confirmation gate has not been passed.
     """
-    confirmed = state.get("ride_confirmed", False)
-    ride = state.get("suggested_ride")
-    platform = state.get("platform_adapter") or "uber"
+    confirmed = state.ride_confirmed or False
+    ride = state.suggested_ride
+    platform = state.platform_adapter or "uber"
 
     # Safety gate — cannot be bypassed by the LLM
     if not confirmed or not ride:
@@ -297,7 +300,8 @@ def book_ride(
         log = make_log_entry(
             "book_ride",
             requested={"platform": platform},
-            verified={"ride_confirmed": confirmed, "ride_available": bool(ride)},
+            verified={"ride_confirmed": confirmed,
+                      "ride_available": bool(ride)},
             executed={},
             outcome="blocked: confirmation gate not satisfied",
         )
