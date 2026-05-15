@@ -2,10 +2,12 @@
 Agent tools exposed to the LLM.
 
 Tool call flow:
-  1. set_platform  — pick the ride platform (default: uber)
-  2. search_rides  — discover options and prices
-  3. suggest_ride  — recommend one option; INTERRUPTS for user confirmation
-  4. book_ride     — executes only when state.ride_confirmed is True
+  1. set_platform      — pick the ride platform (default: uber)
+  2. search_rides      — discover options and prices
+  3. suggest_ride      — recommend one option; INTERRUPTS for user confirmation
+  4. set_guest_info    — collect rider name / email / phone before booking
+  5. book_ride         — executes only when state.ride_confirmed is True
+  6. track_ride        — poll live driver location and ETA after booking
 
 Each tool returns a Command that both updates AgentState fields and injects
 the ToolMessage (keyed by tool_call_id) that the LLM reads as the result.
@@ -24,6 +26,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
 
 from adapters.uber_adapter import UberRideAdapter
+from adapters.uber_guest_client import UberGuestInfo
 from agent.action_log import make_log_entry
 from agent.state import AgentState
 
@@ -42,6 +45,15 @@ def _get_adapter(platform_name: str):
             f"Supported: {list(PLATFORM_REGISTRY)}"
         )
     return cls()
+
+
+def _resolve_guest_info(raw) -> UberGuestInfo | None:
+    """Coerce state.guest_info (UberGuestInfo or dict) to UberGuestInfo."""
+    if raw is None:
+        return None
+    if isinstance(raw, UberGuestInfo):
+        return raw
+    return UberGuestInfo(**raw)
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +144,13 @@ def search_rides(
             f"(~{r['duration_estimate_minutes']} min, up to {r['capacity']} passengers)"
             for i, r in enumerate(results)
         ]
-        content = f"Found {len(results)} ride options:\n" + \
-            "\n".join(summary_lines)
+        content = f"Found {len(results)} ride options:\n" + "\n".join(summary_lines)
 
         log = make_log_entry(
             "search_rides",
-            requested={"pickup": pickup,
-                       "dropoff": dropoff, "platform": platform},
+            requested={"pickup": pickup, "dropoff": dropoff, "platform": platform},
             verified={"adapter_available": True},
-            executed={"method": "search_rides",
-                      "pickup": pickup, "dropoff": dropoff},
+            executed={"method": "search_rides", "pickup": pickup, "dropoff": dropoff},
             outcome=f"found {len(results)} options",
         )
         return Command(
@@ -274,7 +283,87 @@ def suggest_ride(
 
 
 # ---------------------------------------------------------------------------
-# Tool 4 — book_ride
+# Tool 4 — set_guest_info
+# ---------------------------------------------------------------------------
+
+
+@tool
+def set_guest_info(
+    first_name: str,
+    last_name: str,
+    email: str,
+    phone_number: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """
+    Store the guest's personal details required by the Uber Guest Rides API.
+    Call this before book_ride whenever guest information has not yet been set.
+    Ask the user for these details if they have not been volunteered.
+
+    Args:
+        first_name:   Guest's first name.
+        last_name:    Guest's last name.
+        email:        Guest's email address.
+        phone_number: Guest's phone number in E.164 format (e.g. +12125551234).
+    """
+    try:
+        guest = UberGuestInfo(
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            phone_number=phone_number,
+        )
+    except Exception as exc:
+        log = make_log_entry(
+            "set_guest_info",
+            requested={
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "phone_number": phone_number,
+            },
+            verified={"valid": False},
+            executed={},
+            outcome=f"error: {exc}",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [
+                    ToolMessage(
+                        content=f"Invalid guest info: {exc}",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
+
+    log = make_log_entry(
+        "set_guest_info",
+        requested={"first_name": first_name, "last_name": last_name, "email": email},
+        verified={"valid": True},
+        executed={"stored": True},
+        outcome=f"guest info set for {first_name} {last_name}",
+    )
+    return Command(
+        update={
+            "guest_info": guest,
+            "action_log": [log],
+            "messages": [
+                ToolMessage(
+                    content=(
+                        f"Guest info saved for **{first_name} {last_name}** "
+                        f"({email}). Ready to proceed with booking."
+                    ),
+                    tool_call_id=tool_call_id,
+                )
+            ],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool 5 — book_ride
 # ---------------------------------------------------------------------------
 
 
@@ -285,11 +374,13 @@ def book_ride(
 ) -> Command:
     """
     Book the ride that the user has already confirmed via suggest_ride.
+    Requires guest info to have been set via set_guest_info.
     Will refuse to proceed if the confirmation gate has not been passed.
     """
     confirmed = state.ride_confirmed or False
     ride = state.suggested_ride
     platform = state.platform_adapter or "uber"
+    guest = _resolve_guest_info(state.guest_info)
 
     # Safety gate — cannot be bypassed by the LLM
     if not confirmed or not ride:
@@ -300,8 +391,7 @@ def book_ride(
         log = make_log_entry(
             "book_ride",
             requested={"platform": platform},
-            verified={"ride_confirmed": confirmed,
-                      "ride_available": bool(ride)},
+            verified={"ride_confirmed": confirmed, "ride_available": bool(ride)},
             executed={},
             outcome="blocked: confirmation gate not satisfied",
         )
@@ -312,9 +402,28 @@ def book_ride(
             }
         )
 
+    if guest is None:
+        msg = (
+            "Cannot book: guest information is missing. "
+            "Call set_guest_info with the rider's name, email, and phone number first."
+        )
+        log = make_log_entry(
+            "book_ride",
+            requested={"platform": platform},
+            verified={"ride_confirmed": True, "guest_info_set": False},
+            executed={},
+            outcome="blocked: guest info missing",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+            }
+        )
+
     try:
         adapter = _get_adapter(platform)
-        booking = adapter.book_ride(ride)
+        booking = adapter.book_ride(ride, guest=guest)
 
         driver = booking.get("driver", {})
         content = (
@@ -367,4 +476,91 @@ def book_ride(
         )
 
 
-ALL_TOOLS = [set_platform, search_rides, suggest_ride, book_ride]
+# ---------------------------------------------------------------------------
+# Tool 6 — track_ride
+# ---------------------------------------------------------------------------
+
+
+@tool
+def track_ride(
+    state: Annotated[AgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """
+    Get the current status and driver location for the active booked ride.
+    Call this after book_ride to check ride progress.
+    """
+    booked = state.booked_ride
+    platform = state.platform_adapter or "uber"
+
+    if not booked or not booked.get("ride_id"):
+        msg = "No active booking found. Call book_ride first."
+        log = make_log_entry(
+            "track_ride",
+            requested={"platform": platform},
+            verified={"has_booking": False},
+            executed={},
+            outcome="error: no active booking",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+            }
+        )
+
+    ride_id = booked["ride_id"]
+
+    try:
+        adapter = _get_adapter(platform)
+        status = adapter.track_ride(ride_id)
+
+        loc = status.get("driver_location", {})
+        driver = status.get("driver", {})
+        eta = status.get("eta_minutes")
+        eta_str = f"{eta} minutes" if eta is not None else "unknown"
+
+        content = (
+            f"**Ride status:** {status.get('status', 'unknown')}\n"
+            f"**Driver:** {driver.get('name')} ⭐ {driver.get('rating')}\n"
+            f"**ETA:** {eta_str}\n"
+            f"**Driver location:** lat {loc.get('latitude')}, "
+            f"lon {loc.get('longitude')}"
+        )
+
+        log = make_log_entry(
+            "track_ride",
+            requested={"ride_id": ride_id, "platform": platform},
+            verified={"has_booking": True},
+            executed={"method": "track_ride", "ride_id": ride_id},
+            outcome=f"status={status.get('status', 'unknown')}",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
+            }
+        )
+
+    except Exception as exc:
+        log = make_log_entry(
+            "track_ride",
+            requested={"ride_id": ride_id, "platform": platform},
+            verified={"has_booking": True},
+            executed={},
+            outcome=f"error: {exc}",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [
+                    ToolMessage(
+                        content=f"Error tracking ride: {exc}",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
+
+
+ALL_TOOLS = [set_platform, search_rides, suggest_ride, set_guest_info, book_ride, track_ride]
