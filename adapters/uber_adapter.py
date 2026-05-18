@@ -53,6 +53,7 @@ class UberRideAdapter(RidePlatformAdapter):
         pickup_coords = self._location_payload(pickup)
         dropoff_coords = self._location_payload(dropoff)
 
+        self._client.setup_sandbox(pickup_coords["latitude"], pickup_coords["longitude"])
         data = self._client.get_estimates(pickup_coords, dropoff_coords)
 
         results: list[dict] = []

@@ -45,6 +45,7 @@ class UberGuestRidesClient:
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
+        self._sandbox = sandbox
         self._base_url = self._SANDBOX_BASE if sandbox else self._PRODUCTION_BASE
         self._token_url = self._SANDBOX_TOKEN_URL if sandbox else self._PRODUCTION_TOKEN_URL
         self._token: str | None = None
@@ -91,6 +92,48 @@ class UberGuestRidesClient:
     # ------------------------------------------------------------------
     # Endpoints
     # ------------------------------------------------------------------
+
+    def list_products(self, latitude: float, longitude: float) -> dict:
+        """
+        GET /v1/products?latitude=X&longitude=Y
+
+        Returns products available near the given coordinates.  Used in
+        sandbox mode to discover product IDs before seeding their state.
+        """
+        resp = httpx.get(
+            f"{self._base_url}/v1/products",
+            headers=self._headers(),
+            params={"latitude": latitude, "longitude": longitude},
+            timeout=10,
+        )
+        self._raise_for_status(resp)
+        return resp.json()
+
+    def setup_sandbox(self, latitude: float, longitude: float) -> None:
+        """
+        Seed the Uber sandbox so that estimates calls return results.
+
+        The sandbox starts with every product unavailable.  This method
+        fetches all products for the given location then PUTs each one
+        to /v1/sandbox/products/{product_id} with drivers_available=true.
+
+        Safe to call in production mode — it becomes a no-op.
+        """
+        if not self._sandbox:
+            return
+
+        data = self.list_products(latitude, longitude)
+        for product in data.get("products", []):
+            product_id = product.get("product_id")
+            if not product_id:
+                continue
+            resp = httpx.put(
+                f"{self._base_url}/v1/sandbox/products/{product_id}",
+                headers=self._headers(),
+                json={"drivers_available": True, "surge_multiplier": 1.0},
+                timeout=10,
+            )
+            self._raise_for_status(resp)
 
     def get_estimates(self, pickup: dict, dropoff: dict) -> dict:
         """
