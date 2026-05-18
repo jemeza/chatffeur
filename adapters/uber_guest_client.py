@@ -44,10 +44,14 @@ class UberGuestRidesClient:
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
+        self._sandbox = sandbox
         self._base_url = self._SANDBOX_BASE if sandbox else self._PRODUCTION_BASE
         self._token_url = self._SANDBOX_TOKEN_URL if sandbox else self._PRODUCTION_TOKEN_URL
         self._token: str | None = None
         self._token_expires_at: float = 0.0
+        # Sandbox run state — the run seeds test drivers and lasts 8 hours.
+        self._sandbox_run_id: str | None = None
+        self._sandbox_run_expires_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Auth — client credentials, auto-refreshed 30 s before expiry
@@ -76,16 +80,67 @@ class UberGuestRidesClient:
         return self._token  # type: ignore[return-value]
 
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self._get_token()}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        if self._sandbox and self._sandbox_run_id:
+            headers["x-uber-sandbox-runuuid"] = self._sandbox_run_id
+        return headers
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response) -> None:
         if resp.is_error:
             raise UberAPIError(resp.status_code, resp.text)
+
+    # ------------------------------------------------------------------
+    # Sandbox run management
+    # ------------------------------------------------------------------
+
+    def create_sandbox_run(
+        self,
+        pickup_location: dict,
+        dropoff_location: dict,
+        parent_product_type_id: str | None = None,
+    ) -> str:
+        """
+        POST /v1/guests/sandbox/run
+
+        Seeds test riders and drivers near the given locations. The returned
+        run_id must be passed as x-uber-sandbox-runuuid on all sandbox calls.
+        Runs expire after 8 hours; call again to refresh.
+
+        pickup_location / dropoff_location: {"latitude": float, "longitude": float}
+        """
+        body: dict = {
+            "pickup_location": pickup_location,
+            "dropoff_location": dropoff_location,
+        }
+        if parent_product_type_id:
+            body["parent_product_type_id"] = parent_product_type_id
+        resp = httpx.post(
+            f"{self._base_url}/v1/guests/sandbox/run",
+            # _headers() intentionally omits run_id here — it isn't set yet.
+            headers=self._headers(),
+            json=body,
+            timeout=15,
+        )
+        self._raise_for_status(resp)
+        self._sandbox_run_id = resp.json()["run_id"]
+        self._sandbox_run_expires_at = time.monotonic() + 8 * 3600
+        return self._sandbox_run_id
+
+    def _ensure_sandbox_run(self, pickup: dict, dropoff: dict) -> None:
+        """Create a sandbox run if one doesn't exist or has expired."""
+        if not self._sandbox:
+            return
+        if self._sandbox_run_id and time.monotonic() < self._sandbox_run_expires_at:
+            return
+        self.create_sandbox_run(
+            pickup_location={"latitude": pickup["latitude"], "longitude": pickup["longitude"]},
+            dropoff_location={"latitude": dropoff["latitude"], "longitude": dropoff["longitude"]},
+        )
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -99,6 +154,7 @@ class UberGuestRidesClient:
         Returns a dict with a "prices" list; each entry has product info,
         fare details (including fare_id for locking upfront price), and ETA.
         """
+        self._ensure_sandbox_run(pickup, dropoff)
         resp = httpx.post(
             f"{self._base_url}/v1/guests/trips/estimates",
             headers=self._headers(),
