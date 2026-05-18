@@ -1,7 +1,9 @@
-from pydantic import BaseModel
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 
 from langgraph.graph.message import add_messages
+from pydantic import BaseModel
+
+from adapters.uber_guest_client import UberGuestInfo
 
 
 def _append_logs(existing: list, new: list) -> list:
@@ -27,6 +29,10 @@ class AgentState(BaseModel):
 
     # Confirmation payload returned by adapter.book_ride() on success.
     booked_ride: Optional[dict] = {}
+
+    # Guest personal details required by the Uber Guest Rides API.
+    # Accepts either a UberGuestInfo instance or a plain dict with the same keys.
+    guest_info: Optional[Union[UberGuestInfo, dict]] = None
 
     # Append-only log of every tool action.  Uses a custom reducer so each
     # tool call can append entries without overwriting previous ones.
