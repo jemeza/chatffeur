@@ -17,12 +17,14 @@ Session state keys
   action_log         list  — mirrors AgentState.action_log for the sidebar
 """
 
+import os
 import uuid
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
+from adapters.uber_adapter import UberRideAdapter
 from agent.graph import build_graph
 
 # ---------------------------------------------------------------------------
@@ -56,6 +58,15 @@ def _init():
         st.session_state.interrupt_data = None
     if "action_log" not in st.session_state:
         st.session_state.action_log = []
+    if "sandbox_run_id" not in st.session_state:
+        _sandbox_enabled = os.environ.get("UBER_SANDBOX", "true").lower() != "false"
+        if _sandbox_enabled:
+            try:
+                st.session_state.sandbox_run_id = UberRideAdapter().initialize_sandbox()
+            except Exception:
+                st.session_state.sandbox_run_id = None
+        else:
+            st.session_state.sandbox_run_id = None
 
 
 _init()
@@ -102,6 +113,8 @@ def _sync_from_state():
 
 def _run(input_data):
     """Stream the graph with the given input, then sync state."""
+    if isinstance(input_data, dict) and "sandbox_run_id" not in input_data:
+        input_data = {**input_data, "sandbox_run_id": st.session_state.get("sandbox_run_id")}
     try:
         for _ in st.session_state.graph.stream(
             input_data, _config(), stream_mode="values"

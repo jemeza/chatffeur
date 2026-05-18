@@ -37,13 +37,15 @@ PLATFORM_REGISTRY = {
 }
 
 
-def _get_adapter(platform_name: str):
+def _get_adapter(platform_name: str, sandbox_run_id: str | None = None):
     cls = PLATFORM_REGISTRY.get(platform_name)
     if cls is None:
         raise ValueError(
             f"Unknown platform '{platform_name}'. "
             f"Supported: {list(PLATFORM_REGISTRY)}"
         )
+    if platform_name == "uber" and sandbox_run_id:
+        return cls(sandbox_run_id=sandbox_run_id)
     return cls()
 
 
@@ -136,7 +138,7 @@ def search_rides(
     platform = state.platform_adapter or "uber"
 
     try:
-        adapter = _get_adapter(platform)
+        adapter = _get_adapter(platform, sandbox_run_id=state.sandbox_run_id)
         results = adapter.search_rides(pickup=pickup, dropoff=dropoff)
 
         summary_lines = [
@@ -422,7 +424,7 @@ def book_ride(
         )
 
     try:
-        adapter = _get_adapter(platform)
+        adapter = _get_adapter(platform, sandbox_run_id=state.sandbox_run_id)
         booking = adapter.book_ride(ride, guest=guest)
 
         driver = booking.get("driver", {})
@@ -512,7 +514,7 @@ def track_ride(
     ride_id = booked["ride_id"]
 
     try:
-        adapter = _get_adapter(platform)
+        adapter = _get_adapter(platform, sandbox_run_id=state.sandbox_run_id)
         status = adapter.track_ride(ride_id)
 
         loc = status.get("driver_location", {})

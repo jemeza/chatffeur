@@ -23,6 +23,7 @@ class UberRideAdapter(RidePlatformAdapter):
         client_id: str | None = None,
         client_secret: str | None = None,
         sandbox: bool | None = None,
+        sandbox_run_id: str | None = None,
     ) -> None:
         _id = client_id or os.environ.get("UBER_CLIENT_ID", "")
         _secret = client_secret or os.environ.get("UBER_CLIENT_SECRET", "")
@@ -35,6 +36,29 @@ class UberRideAdapter(RidePlatformAdapter):
             client_id=_id,
             client_secret=_secret,
             sandbox=_sandbox,
+            sandbox_run_id=sandbox_run_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Sandbox initialisation
+    # ------------------------------------------------------------------
+
+    def initialize_sandbox(
+        self,
+        pickup_location: dict | None = None,
+        dropoff_location: dict | None = None,
+    ) -> str:
+        """
+        Create a sandbox run and return the run_id.
+
+        Defaults to a Times Square → JFK route so the sandbox driver is placed
+        in New York, which is a city Uber operates in.
+        """
+        pickup = pickup_location or {"latitude": 40.7580, "longitude": -73.9855}
+        dropoff = dropoff_location or {"latitude": 40.6413, "longitude": -73.7781}
+        return self._client.create_sandbox_run(
+            pickup_location=pickup,
+            dropoff_location=dropoff,
         )
 
     # ------------------------------------------------------------------

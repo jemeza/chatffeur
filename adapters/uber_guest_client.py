@@ -39,12 +39,15 @@ class UberGuestRidesClient:
         client_id: str,
         client_secret: str,
         sandbox: bool = True,
+        sandbox_run_id: str | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
+        self._sandbox = sandbox
         self._base_url = self._SANDBOX_BASE if sandbox else self._PRODUCTION_BASE
         self._token: str | None = None
         self._token_expires_at: float = 0.0
+        self._sandbox_run_id: str | None = sandbox_run_id
 
     # ------------------------------------------------------------------
     # Auth — client credentials, auto-refreshed 30 s before expiry
@@ -73,16 +76,62 @@ class UberGuestRidesClient:
         return self._token  # type: ignore[return-value]
 
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self._get_token()}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        if self._sandbox_run_id:
+            headers["x-uber-sandbox-runuuid"] = self._sandbox_run_id
+        return headers
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response) -> None:
         if resp.is_error:
             raise UberAPIError(resp.status_code, resp.text)
+
+    # ------------------------------------------------------------------
+    # Sandbox
+    # ------------------------------------------------------------------
+
+    def create_sandbox_run(
+        self,
+        pickup_location: dict,
+        dropoff_location: dict,
+        parent_product_type_id: str | None = None,
+        auto_accept: bool = True,
+    ) -> str:
+        """
+        POST /v1/guests/sandbox/run
+
+        Creates a sandbox run seeded with a virtual driver near pickup_location.
+        Returns the run_id, which is automatically attached to all subsequent
+        requests via the x-uber-sandbox-runuuid header.
+
+        The run is valid for 8 hours and supports trips within the same city.
+        """
+        if not self._sandbox:
+            raise RuntimeError("create_sandbox_run is only available in sandbox mode")
+
+        body: dict = {
+            "driver_locations": [{}],  # one driver placed randomly near pickup
+            "pickup_location": pickup_location,
+            "dropoff_location": dropoff_location,
+            "preferences": {"auto_accept_trip": auto_accept},
+        }
+        if parent_product_type_id:
+            body["parent_product_type_id"] = parent_product_type_id
+
+        resp = httpx.post(
+            f"{self._base_url}/v1/guests/sandbox/run",
+            headers=self._headers(),
+            json=body,
+            timeout=15,
+        )
+        self._raise_for_status(resp)
+        run_id: str = resp.json()["run_id"]
+        self._sandbox_run_id = run_id
+        return run_id
 
     # ------------------------------------------------------------------
     # Endpoints

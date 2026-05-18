@@ -34,6 +34,10 @@ class AgentState(BaseModel):
     # Accepts either a UberGuestInfo instance or a plain dict with the same keys.
     guest_info: Optional[Union[UberGuestInfo, dict]] = None
 
+    # Uber sandbox run_id injected from app.py on first message; attached to
+    # every API call via x-uber-sandbox-runuuid header (sandbox mode only).
+    sandbox_run_id: Optional[str] = None
+
     # Append-only log of every tool action.  Uses a custom reducer so each
     # tool call can append entries without overwriting previous ones.
     action_log: Annotated[list, _append_logs] = []
