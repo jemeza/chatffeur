@@ -32,7 +32,9 @@ class UberAPIError(Exception):
 class UberGuestRidesClient:
     _PRODUCTION_BASE = "https://api.uber.com"
     _SANDBOX_BASE = "https://sandbox-api.uber.com"
-    _TOKEN_URL = "https://auth.uber.com/oauth/v2/token"
+    # Each environment has its own OAuth server — tokens are not cross-compatible.
+    _PRODUCTION_TOKEN_URL = "https://auth.uber.com/oauth/v2/token"
+    _SANDBOX_TOKEN_URL = "https://sandbox-api.uber.com/oauth/v2/token"
 
     def __init__(
         self,
@@ -43,6 +45,7 @@ class UberGuestRidesClient:
         self._client_id = client_id
         self._client_secret = client_secret
         self._base_url = self._SANDBOX_BASE if sandbox else self._PRODUCTION_BASE
+        self._token_url = self._SANDBOX_TOKEN_URL if sandbox else self._PRODUCTION_TOKEN_URL
         self._token: str | None = None
         self._token_expires_at: float = 0.0
 
@@ -52,7 +55,7 @@ class UberGuestRidesClient:
 
     def _fetch_token(self) -> None:
         resp = httpx.post(
-            self._TOKEN_URL,
+            self._token_url,
             data={
                 "client_id": self._client_id,
                 "client_secret": self._client_secret,
