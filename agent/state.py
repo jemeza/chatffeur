@@ -1,7 +1,7 @@
 from typing import Annotated, Optional, Union
 
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from adapters.mock_uber_client import UberGuestInfo
 
@@ -10,7 +10,12 @@ def _append_logs(existing: list, new: list) -> list:
     return existing + new
 
 
+def _merge_dicts(existing: dict, new: dict) -> dict:
+    return {**existing, **new}
+
+
 class AgentState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     # Conversation history — add_messages merges new messages by id.
     messages: Annotated[list, add_messages] = []
 
@@ -37,3 +42,8 @@ class AgentState(BaseModel):
     # Append-only log of every tool action.  Uses a custom reducer so each
     # tool call can append entries without overwriting previous ones.
     action_log: Annotated[list, _append_logs] = []
+
+    # Live adapter instances keyed by platform name.  Storing them in state
+    # (rather than a module-level dict) keeps per-session trip data isolated
+    # across concurrent sessions while surviving across tool calls within one.
+    adapter_instances: Annotated[dict, _merge_dicts] = {}

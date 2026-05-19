@@ -36,21 +36,17 @@ PLATFORM_REGISTRY = {
     # "zocdoc": ZocdocAdapter,   ← different domain, subclass PlatformAdapter
 }
 
-# Singleton adapter instances — keyed by platform name so that in-memory
-# state (e.g. MockUberGuestRidesClient._trips) survives across tool calls.
-_ADAPTER_INSTANCES: dict = {}
-
-
-def _get_adapter(platform_name: str):
+def _get_adapter(platform_name: str, instances: dict) -> tuple:
+    """Return (adapter, updated_instances) — creates the adapter on first call."""
     cls = PLATFORM_REGISTRY.get(platform_name)
     if cls is None:
         raise ValueError(
             f"Unknown platform '{platform_name}'. "
             f"Supported: {list(PLATFORM_REGISTRY)}"
         )
-    if platform_name not in _ADAPTER_INSTANCES:
-        _ADAPTER_INSTANCES[platform_name] = cls()
-    return _ADAPTER_INSTANCES[platform_name]
+    if platform_name not in instances:
+        instances = {**instances, platform_name: cls()}
+    return instances[platform_name], instances
 
 
 def _resolve_guest_info(raw) -> UberGuestInfo | None:
@@ -142,7 +138,7 @@ def search_rides(
     platform = state.platform_adapter or "uber"
 
     try:
-        adapter = _get_adapter(platform)
+        adapter, instances = _get_adapter(platform, state.adapter_instances)
         results = adapter.search_rides(pickup=pickup, dropoff=dropoff)
 
         summary_lines = [
@@ -164,6 +160,7 @@ def search_rides(
         )
         return Command(
             update={
+                "adapter_instances": instances,
                 "search_results": results,
                 "action_log": [log],
                 "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
@@ -433,9 +430,8 @@ def book_ride(
         )
 
     try:
-        adapter = _get_adapter(platform)
+        adapter, instances = _get_adapter(platform, state.adapter_instances)
         booking = adapter.book_ride(ride, guest=guest)
-        state.booked_ride = booking
 
         driver = booking.get("driver", {})
         content = (
@@ -461,6 +457,7 @@ def book_ride(
         )
         return Command(
             update={
+                "adapter_instances": instances,
                 "booked_ride": booking,
                 "action_log": [log],
                 "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
@@ -524,7 +521,7 @@ def track_ride(
     ride_id = booked["ride_id"]
 
     try:
-        adapter = _get_adapter(platform)
+        adapter, instances = _get_adapter(platform, state.adapter_instances)
         status = adapter.track_ride(ride_id)
 
         loc = status.get("driver_location", {})
@@ -549,6 +546,7 @@ def track_ride(
         )
         return Command(
             update={
+                "adapter_instances": instances,
                 "action_log": [log],
                 "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
             }
