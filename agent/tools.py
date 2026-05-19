@@ -144,13 +144,16 @@ def search_rides(
             f"(~{r['duration_estimate_minutes']} min, up to {r['capacity']} passengers)"
             for i, r in enumerate(results)
         ]
-        content = f"Found {len(results)} ride options:\n" + "\n".join(summary_lines)
+        content = f"Found {len(results)} ride options:\n" + \
+            "\n".join(summary_lines)
 
         log = make_log_entry(
             "search_rides",
-            requested={"pickup": pickup, "dropoff": dropoff, "platform": platform},
+            requested={"pickup": pickup,
+                       "dropoff": dropoff, "platform": platform},
             verified={"adapter_available": True},
-            executed={"method": "search_rides", "pickup": pickup, "dropoff": dropoff},
+            executed={"method": "search_rides",
+                      "pickup": pickup, "dropoff": dropoff},
             outcome=f"found {len(results)} options",
         )
         return Command(
@@ -340,7 +343,8 @@ def set_guest_info(
 
     log = make_log_entry(
         "set_guest_info",
-        requested={"first_name": first_name, "last_name": last_name, "email": email},
+        requested={"first_name": first_name,
+                   "last_name": last_name, "email": email},
         verified={"valid": True},
         executed={"stored": True},
         outcome=f"guest info set for {first_name} {last_name}",
@@ -391,7 +395,8 @@ def book_ride(
         log = make_log_entry(
             "book_ride",
             requested={"platform": platform},
-            verified={"ride_confirmed": confirmed, "ride_available": bool(ride)},
+            verified={"ride_confirmed": confirmed,
+                      "ride_available": bool(ride)},
             executed={},
             outcome="blocked: confirmation gate not satisfied",
         )
@@ -424,6 +429,7 @@ def book_ride(
     try:
         adapter = _get_adapter(platform)
         booking = adapter.book_ride(ride, guest=guest)
+        state.booked_ride = booking
 
         driver = booking.get("driver", {})
         content = (
@@ -563,4 +569,5 @@ def track_ride(
         )
 
 
-ALL_TOOLS = [set_platform, search_rides, suggest_ride, set_guest_info, book_ride, track_ride]
+ALL_TOOLS = [set_platform, search_rides, suggest_ride,
+             set_guest_info, book_ride, track_ride]
