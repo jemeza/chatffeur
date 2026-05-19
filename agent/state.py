@@ -3,7 +3,7 @@ from typing import Annotated, Optional, Union
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-from adapters.uber_guest_client import UberGuestInfo
+from adapters.mock_uber_client import UberGuestInfo
 
 
 def _append_logs(existing: list, new: list) -> list:

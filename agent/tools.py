@@ -26,7 +26,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
 
 from adapters.uber_adapter import UberRideAdapter
-from adapters.uber_guest_client import UberGuestInfo
+from adapters.mock_uber_client import UberGuestInfo
 from agent.action_log import make_log_entry
 from agent.state import AgentState
 

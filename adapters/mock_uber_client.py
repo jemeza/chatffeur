@@ -12,7 +12,8 @@ import random
 import time
 import uuid
 
-from adapters.uber_guest_client import UberGuestInfo
+from pydantic import BaseModel
+
 
 _PRODUCTS = [
     {
@@ -61,8 +62,10 @@ _VEHICLE_POOL = [
     {"make": "Toyota", "model": "Camry", "year": 2022, "license_plate": "ABC1234"},
     {"make": "Honda", "model": "Accord", "year": 2023, "license_plate": "XYZ5678"},
     {"make": "Tesla", "model": "Model 3", "year": 2023, "license_plate": "EV98765"},
-    {"make": "Chevrolet", "model": "Suburban", "year": 2021, "license_plate": "SUV4321"},
-    {"make": "Mercedes", "model": "E-Class", "year": 2022, "license_plate": "LUX8899"},
+    {"make": "Chevrolet", "model": "Suburban",
+        "year": 2021, "license_plate": "SUV4321"},
+    {"make": "Mercedes", "model": "E-Class",
+        "year": 2022, "license_plate": "LUX8899"},
 ]
 
 _STATUS_TIMELINE = [
@@ -84,6 +87,15 @@ def _pick_status(elapsed: float) -> str:
 
 def _offset_coord(base: float, delta: float = 0.01) -> float:
     return round(base + random.uniform(-delta, delta), 6)
+
+
+class UberGuestInfo(BaseModel):
+    """Personal details required to create a guest ride booking."""
+
+    first_name: str
+    last_name: str
+    email: str
+    phone_number: str  # E.164 format recommended: +12125551234
 
 
 class MockUberGuestRidesClient:
@@ -161,7 +173,8 @@ class MockUberGuestRidesClient:
 
         # Locate the matching product so we can echo back its name.
         product_name = next(
-            (p["display_name"] for p in _PRODUCTS if p["product_id"] == product_id),
+            (p["display_name"]
+             for p in _PRODUCTS if p["product_id"] == product_id),
             "UberX",
         )
 

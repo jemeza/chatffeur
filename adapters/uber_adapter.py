@@ -1,6 +1,6 @@
 from adapters.mock_uber_client import MockUberGuestRidesClient
 from adapters.ride_adapter import RidePlatformAdapter
-from adapters.uber_guest_client import UberGuestInfo
+from adapters.mock_uber_client import UberGuestInfo
 
 
 class UberRideAdapter(RidePlatformAdapter):
@@ -43,7 +43,8 @@ class UberRideAdapter(RidePlatformAdapter):
 
             price_low = float(fare.get("low_value", fare.get("value", 0)))
             price_high = float(fare.get("high_value", fare.get("value", 0)))
-            display = fare.get("display") or f"${price_low:.0f}–{price_high:.0f}"
+            display = fare.get(
+                "display") or f"${price_low:.0f}–{price_high:.0f}"
 
             results.append(
                 {
