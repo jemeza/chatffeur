@@ -1,8 +1,5 @@
 """
-Mock implementation of UberGuestRidesClient for demo and testing.
-
-Mirrors the exact interface of UberGuestRidesClient so UberRideAdapter
-can swap it in transparently when UBER_MOCK=true.
+Mock Uber Guest Rides API client — no network calls, no credentials required.
 
 Trip lifecycle (time-based auto-progression):
   0–8s    → processing

@@ -1,68 +1,21 @@
-import os
-
-from adapters.geocoder import geocode
+from adapters.mock_uber_client import MockUberGuestRidesClient
 from adapters.ride_adapter import RidePlatformAdapter
-from adapters.uber_guest_client import UberGuestInfo, UberGuestRidesClient
+from adapters.uber_guest_client import UberGuestInfo
 
 
 class UberRideAdapter(RidePlatformAdapter):
-    """
-    Uber implementation of RidePlatformAdapter backed by the Uber for Business
-    Guest Rides API (v1/guests/trips).
-
-    Credentials are read from environment variables by default:
-        UBER_CLIENT_ID      — OAuth2 client ID
-        UBER_CLIENT_SECRET  — OAuth2 client secret
-        UBER_SANDBOX        — "true" (default) uses sandbox-api.uber.com
-        UBER_MOCK           — "true" uses the local mock client (no real API calls)
-    """
+    """Uber ride adapter backed by the mock Guest Rides API."""
 
     platform_name = "uber"
 
-    def __init__(
-        self,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-        sandbox: bool | None = None,
-        mock: bool | None = None,
-    ) -> None:
-        _mock = (
-            mock
-            if mock is not None
-            else os.environ.get("UBER_MOCK", "false").lower() == "true"
-        )
-
-        self._mock = _mock
-
-        if _mock:
-            from adapters.mock_uber_client import MockUberGuestRidesClient
-            self._client = MockUberGuestRidesClient()
-        else:
-            _id = client_id or os.environ.get("UBER_CLIENT_ID", "")
-            _secret = client_secret or os.environ.get("UBER_CLIENT_SECRET", "")
-            _sandbox = (
-                sandbox
-                if sandbox is not None
-                else os.environ.get("UBER_SANDBOX", "true").lower() != "false"
-            )
-            self._client = UberGuestRidesClient(
-                client_id=_id,
-                client_secret=_secret,
-                sandbox=_sandbox,
-            )
+    def __init__(self) -> None:
+        self._client = MockUberGuestRidesClient()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _location_payload(self, address: str) -> dict:
-        if self._mock:
-            return self._mock_location_payload(address)
-        lat, lon = geocode(address)
-        return {"latitude": lat, "longitude": lon, "address": address}
-
-    @staticmethod
-    def _mock_location_payload(address: str) -> dict:
         # Deterministic fake coordinates seeded on the address string so that
         # pickup ≠ dropoff but results are stable across repeated calls.
         seed = sum(ord(c) for c in address)
