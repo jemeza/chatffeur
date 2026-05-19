@@ -14,6 +14,7 @@ class UberRideAdapter(RidePlatformAdapter):
         UBER_CLIENT_ID      — OAuth2 client ID
         UBER_CLIENT_SECRET  — OAuth2 client secret
         UBER_SANDBOX        — "true" (default) uses sandbox-api.uber.com
+        UBER_MOCK           — "true" uses the local mock client (no real API calls)
     """
 
     platform_name = "uber"
@@ -23,26 +24,50 @@ class UberRideAdapter(RidePlatformAdapter):
         client_id: str | None = None,
         client_secret: str | None = None,
         sandbox: bool | None = None,
+        mock: bool | None = None,
     ) -> None:
-        _id = client_id or os.environ.get("UBER_CLIENT_ID", "")
-        _secret = client_secret or os.environ.get("UBER_CLIENT_SECRET", "")
-        _sandbox = (
-            sandbox
-            if sandbox is not None
-            else os.environ.get("UBER_SANDBOX", "true").lower() != "false"
+        _mock = (
+            mock
+            if mock is not None
+            else os.environ.get("UBER_MOCK", "false").lower() == "true"
         )
-        self._client = UberGuestRidesClient(
-            client_id=_id,
-            client_secret=_secret,
-            sandbox=_sandbox,
-        )
+
+        self._mock = _mock
+
+        if _mock:
+            from adapters.mock_uber_client import MockUberGuestRidesClient
+            self._client = MockUberGuestRidesClient()
+        else:
+            _id = client_id or os.environ.get("UBER_CLIENT_ID", "")
+            _secret = client_secret or os.environ.get("UBER_CLIENT_SECRET", "")
+            _sandbox = (
+                sandbox
+                if sandbox is not None
+                else os.environ.get("UBER_SANDBOX", "true").lower() != "false"
+            )
+            self._client = UberGuestRidesClient(
+                client_id=_id,
+                client_secret=_secret,
+                sandbox=_sandbox,
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _location_payload(self, address: str) -> dict:
+        if self._mock:
+            return self._mock_location_payload(address)
         lat, lon = geocode(address)
+        return {"latitude": lat, "longitude": lon, "address": address}
+
+    @staticmethod
+    def _mock_location_payload(address: str) -> dict:
+        # Deterministic fake coordinates seeded on the address string so that
+        # pickup ≠ dropoff but results are stable across repeated calls.
+        seed = sum(ord(c) for c in address)
+        lat = round(40.7128 + (seed % 1000) / 10000, 6)
+        lon = round(-74.0060 - (seed % 1000) / 10000, 6)
         return {"latitude": lat, "longitude": lon, "address": address}
 
     # ------------------------------------------------------------------
