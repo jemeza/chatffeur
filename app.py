@@ -70,17 +70,35 @@ def _config():
 # ---------------------------------------------------------------------------
 
 
+def _extract_text(content) -> str:
+    """Return only the text portions of an AIMessage content value."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block["text"])
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return ""
+
+
 def _sync_from_state():
     """Pull new AI messages + action_log + interrupt status from graph state."""
     state = st.session_state.graph.get_state(_config())
     graph_messages = state.values.get("messages", [])
 
-    # Surface new AI text messages (skip pure tool-call placeholders)
     for msg in graph_messages[st.session_state.graph_msg_idx:]:
-        if isinstance(msg, AIMessage) and msg.content:
-            st.session_state.display_messages.append(
-                {"role": "assistant", "content": msg.content}
-            )
+        if isinstance(msg, AIMessage):
+            text = _extract_text(msg.content)
+            tool_calls = getattr(msg, "tool_calls", []) or []
+            if text or tool_calls:
+                display_msg: dict = {"role": "assistant", "content": text}
+                if tool_calls:
+                    display_msg["tool_calls"] = tool_calls
+                st.session_state.display_messages.append(display_msg)
     st.session_state.graph_msg_idx = len(graph_messages)
 
     # Sync action log
@@ -192,7 +210,11 @@ if not st.session_state.display_messages:
 # Render chat history
 for msg in st.session_state.display_messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        if msg["content"]:
+            st.markdown(msg["content"])
+        for tc in msg.get("tool_calls", []):
+            with st.expander(f"🔧 `{tc['name']}`", expanded=False):
+                st.json(tc.get("args", {}))
 
 # ---------------------------------------------------------------------------
 # Ride confirmation card (shown when suggest_ride interrupted the graph)
