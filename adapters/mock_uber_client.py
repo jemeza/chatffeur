@@ -121,15 +121,17 @@ class MockUberGuestRidesClient:
 
     def get_estimates(self, pickup: dict, dropoff: dict) -> dict:
         """Return a realistic set of ride-type price estimates."""
+        # Pick a single surge factor for this request to simulate area-wide demand.
+        surge = round(random.choice([1.0, 1.0, 1.2, 1.5, 1.8, 2.0]), 1)
+
         prices = []
         for product in _PRODUCTS:
             low, high = product["_base_price"]
-            low = round(random.uniform(low * 0.9, low * 1.1), 2)
-            high = round(random.uniform(high * 0.9, high * 1.1), 2)
+            low = round(random.uniform(low * 0.9, low * 1.1) * surge, 2)
+            high = round(random.uniform(high * 0.9, high * 1.1) * surge, 2)
             if low > high:
                 low, high = high, low
             eta_min, eta_max = product["_eta_range"]
-            surge = round(random.choice([1.0, 1.0, 1.0, 1.2, 1.5]), 1)
 
             prices.append(
                 {
