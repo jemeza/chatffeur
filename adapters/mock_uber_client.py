@@ -142,7 +142,7 @@ class MockUberGuestRidesClient:
                         "fare_id": f"fare-{uuid.uuid4().hex[:12]}",
                         "low_value": str(low),
                         "high_value": str(high),
-                        "display": f"${low:.0f}–${high:.0f}",
+                        "display": f"${(low + high) / 2:.0f}",
                         "currency_code": "USD",
                         "surge_multiplier": surge,
                     },

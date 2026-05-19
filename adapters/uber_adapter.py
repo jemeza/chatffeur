@@ -44,7 +44,7 @@ class UberRideAdapter(RidePlatformAdapter):
             price_low = float(fare.get("low_value", fare.get("value", 0)))
             price_high = float(fare.get("high_value", fare.get("value", 0)))
             display = fare.get(
-                "display") or f"${price_low:.0f}–{price_high:.0f}"
+                "display") or f"${(price_low + price_high) / 2:.0f}"
 
             results.append(
                 {
