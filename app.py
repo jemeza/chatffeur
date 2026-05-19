@@ -4,6 +4,7 @@ Chatffeur — Streamlit UI
 Layout
 ------
   Left (main):  Chat messages + ride-confirmation card (when agent interrupts)
+                + live driver tracking panel (after booking)
   Right (sidebar): Live action log
 
 Session state keys
@@ -15,10 +16,16 @@ Session state keys
   awaiting_confirm   bool  — True while the agent is waiting for confirm/reject
   interrupt_data     dict  — {suggested_ride, reasoning} from the interrupt call
   action_log         list  — mirrors AgentState.action_log for the sidebar
+  booked_ride        dict  — booking payload from book_ride (includes coords)
+  platform_name      str   — active platform name (default "uber")
+  last_ride_status   str   — last observed trip status (for change detection)
+  arrival_notified   bool  — True once the arrival toast has been shown
 """
 
 import uuid
 
+import pandas as pd
+import pydeck as pdk
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
@@ -56,6 +63,14 @@ def _init():
         st.session_state.interrupt_data = None
     if "action_log" not in st.session_state:
         st.session_state.action_log = []
+    if "booked_ride" not in st.session_state:
+        st.session_state.booked_ride = None
+    if "platform_name" not in st.session_state:
+        st.session_state.platform_name = "uber"
+    if "last_ride_status" not in st.session_state:
+        st.session_state.last_ride_status = None
+    if "arrival_notified" not in st.session_state:
+        st.session_state.arrival_notified = False
 
 
 _init()
@@ -105,6 +120,12 @@ def _sync_from_state():
     if state.values.get("action_log"):
         st.session_state.action_log = state.values["action_log"]
 
+    # Sync booking and platform info
+    if state.values.get("booked_ride"):
+        st.session_state.booked_ride = state.values["booked_ride"]
+    if state.values.get("platform_adapter"):
+        st.session_state.platform_name = state.values["platform_adapter"]
+
     # Detect interrupt
     if state.next:
         for task in state.tasks:
@@ -142,9 +163,160 @@ def _reset():
         "awaiting_confirm",
         "interrupt_data",
         "action_log",
+        "booked_ride",
+        "platform_name",
+        "last_ride_status",
+        "arrival_notified",
     ]:
         st.session_state.pop(key, None)
     st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Live driver tracking fragment (auto-refreshes every 3 s after booking)
+# ---------------------------------------------------------------------------
+
+_STATUS_LABELS = {
+    "processing": "🔄 Processing",
+    "accepted": "✅ Accepted",
+    "arriving": "🚗 Arriving",
+    "in_progress": "🚀 In Progress",
+    "completed": "🏁 Completed",
+    "rider_canceled": "❌ Cancelled",
+}
+
+_MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+
+
+@st.fragment(run_every=3)
+def _render_tracking_panel():
+    booked = st.session_state.get("booked_ride")
+    if not booked or not booked.get("ride_id"):
+        return
+
+    from agent.tools import _get_adapter  # noqa: PLC0415
+
+    platform = st.session_state.get("platform_name", "uber")
+
+    try:
+        adapter = _get_adapter(platform)
+        tracking = adapter.track_ride(booked["ride_id"])
+    except Exception as exc:
+        st.warning(f"Could not fetch tracking data: {exc}")
+        return
+
+    status = tracking.get("status", "unknown")
+    driver_loc = tracking.get("driver_location", {})
+    driver = tracking.get("driver", {})
+    eta = tracking.get("eta_minutes")
+    pickup_coords = tracking.get("pickup_coords") or booked.get("pickup_coords", {})
+    dropoff_coords = tracking.get("dropoff_coords") or booked.get("dropoff_coords", {})
+
+    # Arrival notification — fire toast exactly once when status becomes "arriving"
+    if status == "arriving" and not st.session_state.arrival_notified:
+        st.toast("🚗 Your driver has arrived! Please head outside.", icon="🚗")
+        st.session_state.arrival_notified = True
+    st.session_state.last_ride_status = status
+
+    # Don't render a panel for terminal/unknown states before tracking starts
+    if status in ("not_found",):
+        return
+
+    st.divider()
+    st.subheader("🗺️ Live Driver Tracking")
+
+    # Contextual status banner
+    if status == "arriving":
+        st.success("🚗 **Your driver has arrived at the pickup location!** Please head outside.")
+    elif status == "in_progress":
+        st.info("🚀 **You're on your way!** Enjoy the ride.")
+    elif status == "completed":
+        st.success("✅ **Ride completed!** Thanks for riding with Chatffeur.")
+    elif status == "rider_canceled":
+        st.error("❌ Ride was cancelled.")
+
+    # Metric row
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Status", _STATUS_LABELS.get(status, status.replace("_", " ").title()))
+    c2.metric("Driver", driver.get("name", "—"))
+    c3.metric(
+        "ETA to pickup",
+        f"{eta} min" if eta is not None and eta > 0 else "Arrived",
+    )
+
+    # Map
+    drv_lat = driver_loc.get("latitude")
+    drv_lon = driver_loc.get("longitude")
+
+    if drv_lat is not None and drv_lon is not None:
+        points = []
+
+        if pickup_coords and pickup_coords.get("latitude") is not None:
+            points.append({
+                "lat": pickup_coords["latitude"],
+                "lon": pickup_coords["longitude"],
+                "label": f"📍 Pickup: {booked.get('pickup', '')}",
+                "color": [34, 197, 94],
+                "radius": 70,
+            })
+
+        if dropoff_coords and dropoff_coords.get("latitude") is not None:
+            points.append({
+                "lat": dropoff_coords["latitude"],
+                "lon": dropoff_coords["longitude"],
+                "label": f"🏁 Dropoff: {booked.get('dropoff', '')}",
+                "color": [239, 68, 68],
+                "radius": 70,
+            })
+
+        points.append({
+            "lat": drv_lat,
+            "lon": drv_lon,
+            "label": f"🚗 {driver.get('name', 'Driver')} — {booked.get('product', '')}",
+            "color": [37, 99, 235],
+            "radius": 90,
+        })
+
+        df = pd.DataFrame(points)
+
+        # Centre between driver and pickup
+        if pickup_coords and pickup_coords.get("latitude") is not None:
+            center_lat = (drv_lat + pickup_coords["latitude"]) / 2
+            center_lon = (drv_lon + pickup_coords["longitude"]) / 2
+        else:
+            center_lat, center_lon = drv_lat, drv_lon
+
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            df,
+            get_position=["lon", "lat"],
+            get_color="color",
+            get_radius="radius",
+            pickable=True,
+            opacity=0.9,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=2,
+        )
+
+        view = pdk.ViewState(
+            latitude=center_lat,
+            longitude=center_lon,
+            zoom=13,
+            pitch=0,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[layer],
+                initial_view_state=view,
+                map_style=_MAP_STYLE,
+                tooltip={"text": "{label}"},
+            ),
+            use_container_width=True,
+        )
+
+        st.caption("🟢 Pickup  |  🔴 Dropoff  |  🔵 Driver")
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +387,10 @@ for msg in st.session_state.display_messages:
         for tc in msg.get("tool_calls", []):
             with st.expander(f"🔧 `{tc['name']}`", expanded=False):
                 st.json(tc.get("args", {}))
+
+# Live tracking panel — renders and auto-refreshes after a booking is made
+if st.session_state.get("booked_ride"):
+    _render_tracking_panel()
 
 # ---------------------------------------------------------------------------
 # Ride confirmation card (shown when suggest_ride interrupted the graph)

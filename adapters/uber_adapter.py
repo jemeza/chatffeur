@@ -121,6 +121,8 @@ class UberRideAdapter(RidePlatformAdapter):
                 "license_plate": vehicle.get("license_plate", ""),
             },
             "pickup_eta_minutes": trip.get("pickup_estimate", 0),
+            "pickup_coords": pickup,
+            "dropoff_coords": dropoff,
         }
 
     # ------------------------------------------------------------------
@@ -133,6 +135,7 @@ class UberRideAdapter(RidePlatformAdapter):
         destination = trip.get("destination", {})
         driver = trip.get("driver", {})
 
+        pickup = trip.get("pickup", {})
         return {
             "ride_id": ride_id,
             "status": trip.get("status", "unknown"),
@@ -146,6 +149,14 @@ class UberRideAdapter(RidePlatformAdapter):
                 "name": driver.get("name", ""),
                 "rating": float(driver.get("rating") or 0),
                 "phone_number": driver.get("phone_number", ""),
+            },
+            "pickup_coords": {
+                "latitude": pickup.get("latitude"),
+                "longitude": pickup.get("longitude"),
+            },
+            "dropoff_coords": {
+                "latitude": destination.get("latitude"),
+                "longitude": destination.get("longitude"),
             },
         }
 
