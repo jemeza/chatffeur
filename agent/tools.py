@@ -36,6 +36,10 @@ PLATFORM_REGISTRY = {
     # "zocdoc": ZocdocAdapter,   ← different domain, subclass PlatformAdapter
 }
 
+# Singleton adapter instances — keyed by platform name so that in-memory
+# state (e.g. MockUberGuestRidesClient._trips) survives across tool calls.
+_ADAPTER_INSTANCES: dict = {}
+
 
 def _get_adapter(platform_name: str):
     cls = PLATFORM_REGISTRY.get(platform_name)
@@ -44,7 +48,9 @@ def _get_adapter(platform_name: str):
             f"Unknown platform '{platform_name}'. "
             f"Supported: {list(PLATFORM_REGISTRY)}"
         )
-    return cls()
+    if platform_name not in _ADAPTER_INSTANCES:
+        _ADAPTER_INSTANCES[platform_name] = cls()
+    return _ADAPTER_INSTANCES[platform_name]
 
 
 def _resolve_guest_info(raw) -> UberGuestInfo | None:
