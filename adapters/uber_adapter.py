@@ -1,48 +1,26 @@
-import os
-
-from adapters.geocoder import geocode
+from adapters.mock_uber_client import MockUberGuestRidesClient
 from adapters.ride_adapter import RidePlatformAdapter
-from adapters.uber_guest_client import UberGuestInfo, UberGuestRidesClient
+from adapters.mock_uber_client import UberGuestInfo
 
 
 class UberRideAdapter(RidePlatformAdapter):
-    """
-    Uber implementation of RidePlatformAdapter backed by the Uber for Business
-    Guest Rides API (v1/guests/trips).
-
-    Credentials are read from environment variables by default:
-        UBER_CLIENT_ID      — OAuth2 client ID
-        UBER_CLIENT_SECRET  — OAuth2 client secret
-        UBER_SANDBOX        — "true" (default) uses sandbox-api.uber.com
-    """
+    """Uber ride adapter backed by the mock Guest Rides API."""
 
     platform_name = "uber"
 
-    def __init__(
-        self,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-        sandbox: bool | None = None,
-    ) -> None:
-        _id = client_id or os.environ.get("UBER_CLIENT_ID", "")
-        _secret = client_secret or os.environ.get("UBER_CLIENT_SECRET", "")
-        _sandbox = (
-            sandbox
-            if sandbox is not None
-            else os.environ.get("UBER_SANDBOX", "true").lower() != "false"
-        )
-        self._client = UberGuestRidesClient(
-            client_id=_id,
-            client_secret=_secret,
-            sandbox=_sandbox,
-        )
+    def __init__(self) -> None:
+        self._client = MockUberGuestRidesClient()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _location_payload(self, address: str) -> dict:
-        lat, lon = geocode(address)
+        # Deterministic fake coordinates seeded on the address string so that
+        # pickup ≠ dropoff but results are stable across repeated calls.
+        seed = sum(ord(c) for c in address)
+        lat = round(40.7128 + (seed % 1000) / 10000, 6)
+        lon = round(-74.0060 - (seed % 1000) / 10000, 6)
         return {"latitude": lat, "longitude": lon, "address": address}
 
     # ------------------------------------------------------------------
@@ -65,7 +43,8 @@ class UberRideAdapter(RidePlatformAdapter):
 
             price_low = float(fare.get("low_value", fare.get("value", 0)))
             price_high = float(fare.get("high_value", fare.get("value", 0)))
-            display = fare.get("display") or f"${price_low:.0f}–{price_high:.0f}"
+            display = fare.get(
+                "display") or f"${price_low:.0f}–{price_high:.0f}"
 
             results.append(
                 {

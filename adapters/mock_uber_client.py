@@ -1,0 +1,292 @@
+"""
+Mock Uber Guest Rides API client — no network calls, no credentials required.
+
+Trip lifecycle (time-based auto-progression):
+  0–8s    → processing
+  8–25s   → accepted
+  25–60s  → arriving
+  60–180s → in_progress
+  180s+   → completed
+"""
+import random
+import time
+import uuid
+
+from pydantic import BaseModel
+
+
+_PRODUCTS = [
+    {
+        "product_id": "mock-uberx-0001",
+        "display_name": "UberX",
+        "description": "Affordable, everyday rides",
+        "capacity": 4,
+        "_base_price": (12.0, 18.0),
+        "_eta_range": (4, 10),
+    },
+    {
+        "product_id": "mock-comfort-0001",
+        "display_name": "Uber Comfort",
+        "description": "Newer cars with extra legroom",
+        "capacity": 4,
+        "_base_price": (18.0, 26.0),
+        "_eta_range": (6, 14),
+    },
+    {
+        "product_id": "mock-uberxl-0001",
+        "display_name": "UberXL",
+        "description": "Affordable rides for groups up to 6",
+        "capacity": 6,
+        "_base_price": (22.0, 34.0),
+        "_eta_range": (8, 18),
+    },
+    {
+        "product_id": "mock-black-0001",
+        "display_name": "Uber Black",
+        "description": "Premium rides in luxury cars",
+        "capacity": 4,
+        "_base_price": (40.0, 65.0),
+        "_eta_range": (3, 8),
+    },
+]
+
+_DRIVER_POOL = [
+    {"name": "Marcus T.", "rating": "4.95", "phone_number": "+15550001111"},
+    {"name": "Priya S.", "rating": "4.88", "phone_number": "+15550002222"},
+    {"name": "Derek W.", "rating": "4.92", "phone_number": "+15550003333"},
+    {"name": "Amara N.", "rating": "4.79", "phone_number": "+15550004444"},
+    {"name": "Carlos R.", "rating": "4.97", "phone_number": "+15550005555"},
+]
+
+_VEHICLE_POOL = [
+    {"make": "Toyota", "model": "Camry", "year": 2022, "license_plate": "ABC1234"},
+    {"make": "Honda", "model": "Accord", "year": 2023, "license_plate": "XYZ5678"},
+    {"make": "Tesla", "model": "Model 3", "year": 2023, "license_plate": "EV98765"},
+    {"make": "Chevrolet", "model": "Suburban",
+        "year": 2021, "license_plate": "SUV4321"},
+    {"make": "Mercedes", "model": "E-Class",
+        "year": 2022, "license_plate": "LUX8899"},
+]
+
+_STATUS_TIMELINE = [
+    (0, "processing"),
+    (8, "accepted"),
+    (25, "arriving"),
+    (60, "in_progress"),
+    (180, "completed"),
+]
+
+
+def _pick_status(elapsed: float) -> str:
+    status = "processing"
+    for threshold, s in _STATUS_TIMELINE:
+        if elapsed >= threshold:
+            status = s
+    return status
+
+
+def _offset_coord(base: float, delta: float = 0.01) -> float:
+    return round(base + random.uniform(-delta, delta), 6)
+
+
+class UberGuestInfo(BaseModel):
+    """Personal details required to create a guest ride booking."""
+
+    first_name: str
+    last_name: str
+    email: str
+    phone_number: str  # E.164 format recommended: +12125551234
+
+
+class MockUberGuestRidesClient:
+    """Drop-in replacement for UberGuestRidesClient that never hits the network."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        # Accept same constructor signature; credentials are ignored.
+        self._trips: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Auth stubs (no-ops)
+    # ------------------------------------------------------------------
+
+    def _fetch_token(self) -> None:
+        pass
+
+    def _get_token(self) -> str:
+        return "mock-token"
+
+    # ------------------------------------------------------------------
+    # Estimates
+    # ------------------------------------------------------------------
+
+    def get_estimates(self, pickup: dict, dropoff: dict) -> dict:
+        """Return a realistic set of ride-type price estimates."""
+        prices = []
+        for product in _PRODUCTS:
+            low, high = product["_base_price"]
+            low = round(random.uniform(low * 0.9, low * 1.1), 2)
+            high = round(random.uniform(high * 0.9, high * 1.1), 2)
+            if low > high:
+                low, high = high, low
+            eta_min, eta_max = product["_eta_range"]
+            surge = round(random.choice([1.0, 1.0, 1.0, 1.2, 1.5]), 1)
+
+            prices.append(
+                {
+                    "product_id": product["product_id"],
+                    "display_name": product["display_name"],
+                    "description": product["description"],
+                    "capacity": product["capacity"],
+                    "no_cars_available": False,
+                    "fare": {
+                        "fare_id": f"fare-{uuid.uuid4().hex[:12]}",
+                        "low_value": str(low),
+                        "high_value": str(high),
+                        "display": f"${low:.0f}–${high:.0f}",
+                        "currency_code": "USD",
+                        "surge_multiplier": surge,
+                    },
+                    "trip": {
+                        "duration_estimate": random.randint(eta_min, eta_max),
+                    },
+                }
+            )
+
+        return {"prices": prices}
+
+    # ------------------------------------------------------------------
+    # Create trip
+    # ------------------------------------------------------------------
+
+    def create_trip(
+        self,
+        guest: UberGuestInfo,
+        product_id: str,
+        fare_id: str,
+        pickup: dict,
+        dropoff: dict,
+    ) -> dict:
+        """Instantiate a mock trip and return its initial state."""
+        request_id = f"mock-trip-{uuid.uuid4().hex[:16]}"
+        driver = random.choice(_DRIVER_POOL)
+        vehicle = random.choice(_VEHICLE_POOL)
+
+        # Locate the matching product so we can echo back its name.
+        product_name = next(
+            (p["display_name"]
+             for p in _PRODUCTS if p["product_id"] == product_id),
+            "UberX",
+        )
+
+        trip_record = {
+            "request_id": request_id,
+            "status": "processing",
+            "product_id": product_id,
+            "product_name": product_name,
+            "guest": guest.model_dump(),
+            "pickup": pickup,
+            "dropoff": dropoff,
+            "fare_id": fare_id,
+            "driver": driver,
+            "vehicle": vehicle,
+            "pickup_estimate": random.randint(3, 12),
+            "created_at": time.monotonic(),
+        }
+        self._trips[request_id] = trip_record
+
+        return self._format_trip(trip_record)
+
+    # ------------------------------------------------------------------
+    # Get trip
+    # ------------------------------------------------------------------
+
+    def get_trip(self, request_id: str) -> dict:
+        """Return the current trip state with auto-progressed status."""
+        trip = self._trips.get(request_id)
+        if trip is None:
+            # Return a minimal "not found" shape rather than raising so the
+            # adapter can surface a readable error to the LLM.
+            return {"request_id": request_id, "status": "not_found"}
+
+        elapsed = time.monotonic() - trip["created_at"]
+        trip["status"] = _pick_status(elapsed)
+        return self._format_trip(trip)
+
+    def list_trips(self) -> dict:
+        """Return all mock trips."""
+        return {"trips": [self._format_trip(t) for t in self._trips.values()]}
+
+    # ------------------------------------------------------------------
+    # Cancel trip
+    # ------------------------------------------------------------------
+
+    def cancel_trip(self, request_id: str) -> dict:
+        """Cancel a mock trip; applies a fee if driver was already on the way."""
+        trip = self._trips.get(request_id)
+        if trip is None:
+            return {"request_id": request_id, "status": "not_found"}
+
+        elapsed = time.monotonic() - trip["created_at"]
+        current_status = _pick_status(elapsed)
+
+        # No fee if cancelled before accepted; small fee once driver is heading over.
+        cancellation_fee = "$0.00"
+        if current_status in ("arriving", "in_progress"):
+            cancellation_fee = "$5.00"
+        elif current_status == "accepted":
+            cancellation_fee = "$0.00"
+
+        trip["status"] = "rider_canceled"
+        return {
+            "request_id": request_id,
+            "status": "rider_canceled",
+            "cancellation_fee": cancellation_fee,
+        }
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _format_trip(self, trip: dict) -> dict:
+        """Render a trip record into the shape the real API returns."""
+        elapsed = time.monotonic() - trip["created_at"]
+        status = trip["status"]
+
+        # Simulate driver location moving toward pickup / dropoff.
+        base_lat = trip["pickup"]["latitude"]
+        base_lon = trip["pickup"]["longitude"]
+        if status == "in_progress":
+            base_lat = trip["dropoff"]["latitude"]
+            base_lon = trip["dropoff"]["longitude"]
+
+        return {
+            "request_id": trip["request_id"],
+            "status": status,
+            "driver": {
+                "name": trip["driver"]["name"],
+                "rating": trip["driver"]["rating"],
+                "phone_number": trip["driver"]["phone_number"],
+                "vehicle_year_make_model": (
+                    f"{trip['vehicle']['year']} {trip['vehicle']['make']} "
+                    f"{trip['vehicle']['model']}"
+                ),
+            },
+            "vehicle": {
+                "make": trip["vehicle"]["make"],
+                "model": trip["vehicle"]["model"],
+                "year": trip["vehicle"]["year"],
+                "license_plate": trip["vehicle"]["license_plate"],
+            },
+            "location": {
+                "latitude": _offset_coord(base_lat, 0.005),
+                "longitude": _offset_coord(base_lon, 0.005),
+                "bearing": random.randint(0, 359),
+            },
+            "pickup": trip["pickup"],
+            "destination": {
+                **trip["dropoff"],
+                "eta": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
+            },
+            "pickup_estimate": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
+            "surge_multiplier": 1.0,
+        }
