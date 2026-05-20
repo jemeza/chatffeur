@@ -251,8 +251,9 @@ class MockUberGuestRidesClient:
             # adapter can surface a readable error to the LLM.
             return {"request_id": request_id, "status": "not_found"}
 
-        elapsed = time.monotonic() - trip["created_at"]
-        trip["status"] = _pick_status(elapsed)
+        if trip["status"] != "rider_canceled":
+            elapsed = time.monotonic() - trip["created_at"]
+            trip["status"] = _pick_status(elapsed)
         return self._format_trip(trip)
 
     def list_trips(self) -> dict:
