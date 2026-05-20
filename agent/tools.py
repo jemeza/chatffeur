@@ -26,6 +26,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
 
+from adapters.geocoder import validate_address as _mapbox_validate_address
 from adapters.uber_adapter import UberRideAdapter
 from adapters.mock_uber_client import UberGuestInfo
 from agent.action_log import make_log_entry
@@ -61,6 +62,72 @@ def _resolve_guest_info(raw) -> UberGuestInfo | None:
     if isinstance(raw, UberGuestInfo):
         return raw
     return UberGuestInfo(**raw)
+
+
+# ---------------------------------------------------------------------------
+# Tool 0 — validate_address
+# ---------------------------------------------------------------------------
+
+
+@tool
+def validate_address(
+    address: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """
+    Validate a pickup or dropoff address using the Mapbox Search API and return
+    its canonical form, coordinates, and alternative suggestions.
+
+    Call this when the user provides an ambiguous or potentially misspelled
+    address before calling search_rides, so you can confirm the exact location.
+
+    Args:
+        address: Free-text address to validate (e.g. '350 Fifth Ave, New York').
+    """
+    result = _mapbox_validate_address(address)
+
+    if not result["valid"]:
+        msg = (
+            f"Could not find a match for **{address!r}**. "
+            "Please ask the user to provide a more specific address."
+        )
+        log = make_log_entry(
+            "validate_address",
+            requested={"address": address},
+            verified={"valid": False},
+            executed={},
+            outcome="error: address not found",
+        )
+    else:
+        canonical = result["canonical"]
+        confidence = result["confidence"]
+        suggestions = result.get("suggestions", [])
+
+        confidence_str = f" (confidence: {confidence:.0%})" if confidence is not None else ""
+        msg = f"Address validated: **{canonical}**{confidence_str}"
+
+        if suggestions:
+            alt_lines = "\n".join(f"  - {s['canonical']}" for s in suggestions[:3])
+            msg += f"\n\nAlternative matches if this isn't right:\n{alt_lines}"
+
+        log = make_log_entry(
+            "validate_address",
+            requested={"address": address},
+            verified={"valid": True, "canonical": canonical},
+            executed={
+                "latitude": result["latitude"],
+                "longitude": result["longitude"],
+                "place_type": result["place_type"],
+            },
+            outcome=f"validated: {canonical}",
+        )
+
+    return Command(
+        update={
+            "action_log": [log],
+            "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -671,5 +738,5 @@ def cancel_ride(
         )
 
 
-ALL_TOOLS = [set_platform, search_rides, suggest_ride,
+ALL_TOOLS = [validate_address, set_platform, search_rides, suggest_ride,
              set_guest_info, book_ride, track_ride, cancel_ride]

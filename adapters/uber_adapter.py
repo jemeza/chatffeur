@@ -1,6 +1,6 @@
-from adapters.mock_uber_client import MockUberGuestRidesClient
+from adapters.geocoder import geocode
+from adapters.mock_uber_client import MockUberGuestRidesClient, UberGuestInfo
 from adapters.ride_adapter import RidePlatformAdapter
-from adapters.mock_uber_client import UberGuestInfo
 
 
 class UberRideAdapter(RidePlatformAdapter):
@@ -16,11 +16,13 @@ class UberRideAdapter(RidePlatformAdapter):
     # ------------------------------------------------------------------
 
     def _location_payload(self, address: str) -> dict:
-        # Deterministic fake coordinates seeded on the address string so that
-        # pickup ≠ dropoff but results are stable across repeated calls.
-        seed = sum(ord(c) for c in address)
-        lat = round(40.7128 + (seed % 1000) / 10000, 6)
-        lon = round(-74.0060 - (seed % 1000) / 10000, 6)
+        try:
+            lat, lon = geocode(address)
+        except Exception:
+            # Deterministic fallback coords when geocoding is unavailable.
+            seed = sum(ord(c) for c in address)
+            lat = round(40.7128 + (seed % 1000) / 10000, 6)
+            lon = round(-74.0060 - (seed % 1000) / 10000, 6)
         return {"latitude": lat, "longitude": lon, "address": address}
 
     # ------------------------------------------------------------------
