@@ -71,11 +71,16 @@ _VEHICLE_POOL = [
 
 _STATUS_TIMELINE = [
     (0, "processing"),
-    (8, "accepted"),
-    (25, "arriving"),
-    (60, "in_progress"),
-    (180, "completed"),
+    (3, "accepted"),
+    (8, "arriving"),
+    (15, "in_progress"),
+    (30, "completed"),
 ]
+
+# Phase boundary constants (seconds) — also used for driver interpolation.
+_T_ARRIVING = 8
+_T_IN_PROGRESS = 15
+_T_COMPLETED = 30
 
 
 def _pick_status(elapsed: float) -> str:
@@ -104,13 +109,13 @@ def _smooth_driver_position(trip: dict, elapsed: float, status: str) -> tuple[fl
     if status in ("processing", "accepted"):
         return start["latitude"], start["longitude"]
     elif status == "arriving":
-        t = (elapsed - 25) / (60 - 25)
+        t = (elapsed - _T_ARRIVING) / (_T_IN_PROGRESS - _T_ARRIVING)
         return (
             _lerp(start["latitude"], pickup["latitude"], t),
             _lerp(start["longitude"], pickup["longitude"], t),
         )
     elif status == "in_progress":
-        t = (elapsed - 60) / (180 - 60)
+        t = (elapsed - _T_IN_PROGRESS) / (_T_COMPLETED - _T_IN_PROGRESS)
         return (
             _lerp(pickup["latitude"], dropoff["latitude"], t),
             _lerp(pickup["longitude"], dropoff["longitude"], t),
@@ -329,8 +334,11 @@ class MockUberGuestRidesClient:
             "pickup": trip["pickup"],
             "destination": {
                 **trip["dropoff"],
-                "eta": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
             },
-            "pickup_estimate": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
+            # Seconds remaining until driver reaches pickup; 0 once picked up.
+            "pickup_estimate": (
+                0 if status in ("in_progress", "completed", "rider_canceled")
+                else max(0, int(_T_IN_PROGRESS - elapsed))
+            ),
             "surge_multiplier": 1.0,
         }
