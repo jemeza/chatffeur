@@ -98,6 +98,7 @@ class UberRideAdapter(RidePlatformAdapter):
             fare_id=ride_option.get("_fare_id", ""),
             pickup=pickup,
             dropoff=dropoff,
+            price_estimate=ride_option.get("price_estimate", "$0.00"),
         )
 
         driver = trip.get("driver", {})
