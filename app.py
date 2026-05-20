@@ -24,8 +24,6 @@ Session state keys
 
 import uuid
 
-import pandas as pd
-import pydeck as pdk
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
@@ -185,9 +183,6 @@ _STATUS_LABELS = {
     "rider_canceled": "❌ Cancelled",
 }
 
-_MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
-
-
 @st.fragment(run_every=3)
 def _render_tracking_panel():
     booked = st.session_state.get("booked_ride")
@@ -206,11 +201,8 @@ def _render_tracking_panel():
         return
 
     status = tracking.get("status", "unknown")
-    driver_loc = tracking.get("driver_location", {})
     driver = tracking.get("driver", {})
     eta = tracking.get("eta_minutes")
-    pickup_coords = tracking.get("pickup_coords") or booked.get("pickup_coords", {})
-    dropoff_coords = tracking.get("dropoff_coords") or booked.get("dropoff_coords", {})
 
     # Arrival notification — fire toast exactly once when status becomes "arriving"
     if status == "arriving" and not st.session_state.arrival_notified:
@@ -218,12 +210,11 @@ def _render_tracking_panel():
         st.session_state.arrival_notified = True
     st.session_state.last_ride_status = status
 
-    # Don't render a panel for terminal/unknown states before tracking starts
-    if status in ("not_found",):
+    if status == "not_found":
         return
 
     st.divider()
-    st.subheader("🗺️ Live Driver Tracking")
+    st.subheader("🚗 Ride Status")
 
     # Contextual status banner
     if status == "arriving":
@@ -243,80 +234,6 @@ def _render_tracking_panel():
         "ETA to pickup",
         f"{eta} min" if eta is not None and eta > 0 else "Arrived",
     )
-
-    # Map
-    drv_lat = driver_loc.get("latitude")
-    drv_lon = driver_loc.get("longitude")
-
-    if drv_lat is not None and drv_lon is not None:
-        points = []
-
-        if pickup_coords and pickup_coords.get("latitude") is not None:
-            points.append({
-                "lat": pickup_coords["latitude"],
-                "lon": pickup_coords["longitude"],
-                "label": f"📍 Pickup: {booked.get('pickup', '')}",
-                "color": [34, 197, 94],
-                "radius": 70,
-            })
-
-        if dropoff_coords and dropoff_coords.get("latitude") is not None:
-            points.append({
-                "lat": dropoff_coords["latitude"],
-                "lon": dropoff_coords["longitude"],
-                "label": f"🏁 Dropoff: {booked.get('dropoff', '')}",
-                "color": [239, 68, 68],
-                "radius": 70,
-            })
-
-        points.append({
-            "lat": drv_lat,
-            "lon": drv_lon,
-            "label": f"🚗 {driver.get('name', 'Driver')} — {booked.get('product', '')}",
-            "color": [37, 99, 235],
-            "radius": 90,
-        })
-
-        df = pd.DataFrame(points)
-
-        # Centre between driver and pickup
-        if pickup_coords and pickup_coords.get("latitude") is not None:
-            center_lat = (drv_lat + pickup_coords["latitude"]) / 2
-            center_lon = (drv_lon + pickup_coords["longitude"]) / 2
-        else:
-            center_lat, center_lon = drv_lat, drv_lon
-
-        layer = pdk.Layer(
-            "ScatterplotLayer",
-            df,
-            get_position=["lon", "lat"],
-            get_color="color",
-            get_radius="radius",
-            pickable=True,
-            opacity=0.9,
-            stroked=True,
-            filled=True,
-            line_width_min_pixels=2,
-        )
-
-        view = pdk.ViewState(
-            latitude=center_lat,
-            longitude=center_lon,
-            zoom=13,
-            pitch=0,
-        )
-
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[layer],
-                initial_view_state=view,
-                map_style=_MAP_STYLE,
-                tooltip={"text": "{label}"},
-            ),
-            use_container_width=True,
-        )
-
-        st.caption("🟢 Pickup  |  🔴 Dropoff  |  🔵 Driver")
 
 
 # ---------------------------------------------------------------------------
