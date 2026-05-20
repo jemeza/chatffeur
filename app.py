@@ -4,6 +4,7 @@ Chatffeur — Streamlit UI
 Layout
 ------
   Left (main):  Chat messages + ride-confirmation card (when agent interrupts)
+                + live driver tracking panel (after booking)
   Right (sidebar): Live action log
 
 Session state keys
@@ -15,6 +16,10 @@ Session state keys
   awaiting_confirm   bool  — True while the agent is waiting for confirm/reject
   interrupt_data     dict  — {suggested_ride, reasoning} from the interrupt call
   action_log         list  — mirrors AgentState.action_log for the sidebar
+  booked_ride        dict  — booking payload from book_ride (includes coords)
+  platform_name      str   — active platform name (default "uber")
+  last_ride_status   str   — last observed trip status (for change detection)
+  arrival_notified   bool  — True once the arrival toast has been shown
 """
 
 import uuid
@@ -56,6 +61,14 @@ def _init():
         st.session_state.interrupt_data = None
     if "action_log" not in st.session_state:
         st.session_state.action_log = []
+    if "booked_ride" not in st.session_state:
+        st.session_state.booked_ride = None
+    if "platform_name" not in st.session_state:
+        st.session_state.platform_name = "uber"
+    if "last_ride_status" not in st.session_state:
+        st.session_state.last_ride_status = None
+    if "arrival_notified" not in st.session_state:
+        st.session_state.arrival_notified = False
 
 
 _init()
@@ -105,6 +118,12 @@ def _sync_from_state():
     if state.values.get("action_log"):
         st.session_state.action_log = state.values["action_log"]
 
+    # Sync booking and platform info
+    if state.values.get("booked_ride"):
+        st.session_state.booked_ride = state.values["booked_ride"]
+    if state.values.get("platform_adapter"):
+        st.session_state.platform_name = state.values["platform_adapter"]
+
     # Detect interrupt
     if state.next:
         for task in state.tasks:
@@ -142,9 +161,82 @@ def _reset():
         "awaiting_confirm",
         "interrupt_data",
         "action_log",
+        "booked_ride",
+        "platform_name",
+        "last_ride_status",
+        "arrival_notified",
     ]:
         st.session_state.pop(key, None)
     st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Live driver tracking fragment (auto-refreshes every 3 s after booking)
+# ---------------------------------------------------------------------------
+
+_STATUS_LABELS = {
+    "processing": "🔄 Processing",
+    "accepted": "✅ Accepted",
+    "arriving": "🚗 Arriving",
+    "in_progress": "🚀 In Progress",
+    "completed": "🏁 Completed",
+    "rider_canceled": "❌ Cancelled",
+}
+
+@st.fragment(run_every=3)
+def _render_tracking_panel():
+    booked = st.session_state.get("booked_ride")
+    if not booked or not booked.get("ride_id"):
+        return
+
+    from agent.tools import _get_adapter  # noqa: PLC0415
+
+    platform = st.session_state.get("platform_name", "uber")
+
+    try:
+        adapter = _get_adapter(platform)
+        tracking = adapter.track_ride(booked["ride_id"])
+    except Exception as exc:
+        st.warning(f"Could not fetch tracking data: {exc}")
+        return
+
+    status = tracking.get("status", "unknown")
+    driver = tracking.get("driver", {})
+    eta = tracking.get("eta_seconds")
+    eta_dropoff = tracking.get("eta_dropoff_seconds")
+
+    # Arrival notification — fire toast exactly once when status becomes "arriving"
+    if status == "arriving" and not st.session_state.arrival_notified:
+        st.toast("🚗 Your driver has arrived! Please head outside.", icon="🚗")
+        st.session_state.arrival_notified = True
+    st.session_state.last_ride_status = status
+
+    if status == "not_found":
+        return
+
+    st.divider()
+    st.subheader("🚗 Ride Status")
+
+    # Contextual status banner
+    if status == "arriving":
+        st.success("🚗 **Your driver has arrived at the pickup location!** Please head outside.")
+    elif status == "in_progress":
+        st.info("🚀 **You're on your way!** Enjoy the ride.")
+    elif status == "completed":
+        st.success("✅ **Ride completed!** Thanks for riding with Chatffeur.")
+    elif status == "rider_canceled":
+        st.error("❌ Ride was cancelled.")
+
+    # Metric row
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Status", _STATUS_LABELS.get(status, status.replace("_", " ").title()))
+    c2.metric("Driver", driver.get("name", "—"))
+    if status == "in_progress":
+        c3.metric("ETA to dropoff", f"{eta_dropoff}s" if eta_dropoff else "Arriving")
+    elif status == "completed":
+        c3.metric("ETA to dropoff", "Dropped off")
+    else:
+        c3.metric("ETA to pickup", f"{eta}s" if eta else "Arriving")
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +307,10 @@ for msg in st.session_state.display_messages:
         for tc in msg.get("tool_calls", []):
             with st.expander(f"🔧 `{tc['name']}`", expanded=False):
                 st.json(tc.get("args", {}))
+
+# Live tracking panel — renders and auto-refreshes after a booking is made
+if st.session_state.get("booked_ride"):
+    _render_tracking_panel()
 
 # ---------------------------------------------------------------------------
 # Ride confirmation card (shown when suggest_ride interrupted the graph)

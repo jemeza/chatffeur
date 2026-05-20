@@ -8,6 +8,7 @@ Trip lifecycle (time-based auto-progression):
   60–180s → in_progress
   180s+   → completed
 """
+import math
 import random
 import time
 import uuid
@@ -70,11 +71,16 @@ _VEHICLE_POOL = [
 
 _STATUS_TIMELINE = [
     (0, "processing"),
-    (8, "accepted"),
-    (25, "arriving"),
-    (60, "in_progress"),
-    (180, "completed"),
+    (3, "accepted"),
+    (8, "arriving"),
+    (15, "in_progress"),
+    (30, "completed"),
 ]
+
+# Phase boundary constants (seconds) — also used for driver interpolation.
+_T_ARRIVING = 8
+_T_IN_PROGRESS = 15
+_T_COMPLETED = 30
 
 
 def _pick_status(elapsed: float) -> str:
@@ -85,8 +91,37 @@ def _pick_status(elapsed: float) -> str:
     return status
 
 
-def _offset_coord(base: float, delta: float = 0.01) -> float:
-    return round(base + random.uniform(-delta, delta), 6)
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * max(0.0, min(1.0, t))
+
+
+def _compute_bearing(from_lat: float, from_lon: float, to_lat: float, to_lon: float) -> int:
+    angle = math.degrees(math.atan2(to_lon - from_lon, to_lat - from_lat))
+    return int(angle % 360)
+
+
+def _smooth_driver_position(trip: dict, elapsed: float, status: str) -> tuple[float, float]:
+    """Return (lat, lon) that smoothly moves driver from start → pickup → dropoff."""
+    start = trip.get("driver_start", trip["pickup"])
+    pickup = trip["pickup"]
+    dropoff = trip["dropoff"]
+
+    if status in ("processing", "accepted"):
+        return start["latitude"], start["longitude"]
+    elif status == "arriving":
+        t = (elapsed - _T_ARRIVING) / (_T_IN_PROGRESS - _T_ARRIVING)
+        return (
+            _lerp(start["latitude"], pickup["latitude"], t),
+            _lerp(start["longitude"], pickup["longitude"], t),
+        )
+    elif status == "in_progress":
+        t = (elapsed - _T_IN_PROGRESS) / (_T_COMPLETED - _T_IN_PROGRESS)
+        return (
+            _lerp(pickup["latitude"], dropoff["latitude"], t),
+            _lerp(pickup["longitude"], dropoff["longitude"], t),
+        )
+    else:
+        return dropoff["latitude"], dropoff["longitude"]
 
 
 class UberGuestInfo(BaseModel):
@@ -195,6 +230,10 @@ class MockUberGuestRidesClient:
             "vehicle": vehicle,
             "pickup_estimate": random.randint(3, 12),
             "created_at": time.monotonic(),
+            "driver_start": {
+                "latitude": pickup["latitude"] + random.uniform(-0.02, 0.02),
+                "longitude": pickup["longitude"] + random.uniform(-0.02, 0.02),
+            },
         }
         self._trips[request_id] = trip_record
 
@@ -256,12 +295,20 @@ class MockUberGuestRidesClient:
         elapsed = time.monotonic() - trip["created_at"]
         status = trip["status"]
 
-        # Simulate driver location moving toward pickup / dropoff.
-        base_lat = trip["pickup"]["latitude"]
-        base_lon = trip["pickup"]["longitude"]
-        if status == "in_progress":
-            base_lat = trip["dropoff"]["latitude"]
-            base_lon = trip["dropoff"]["longitude"]
+        # Smoothly interpolate driver position across the trip lifecycle.
+        drv_lat, drv_lon = _smooth_driver_position(trip, elapsed, status)
+
+        # Compute bearing toward the next waypoint.
+        if status in ("processing", "accepted", "arriving"):
+            bearing = _compute_bearing(
+                drv_lat, drv_lon,
+                trip["pickup"]["latitude"], trip["pickup"]["longitude"],
+            )
+        else:
+            bearing = _compute_bearing(
+                drv_lat, drv_lon,
+                trip["dropoff"]["latitude"], trip["dropoff"]["longitude"],
+            )
 
         return {
             "request_id": trip["request_id"],
@@ -282,15 +329,23 @@ class MockUberGuestRidesClient:
                 "license_plate": trip["vehicle"]["license_plate"],
             },
             "location": {
-                "latitude": _offset_coord(base_lat, 0.005),
-                "longitude": _offset_coord(base_lon, 0.005),
-                "bearing": random.randint(0, 359),
+                "latitude": round(drv_lat, 6),
+                "longitude": round(drv_lon, 6),
+                "bearing": bearing,
             },
             "pickup": trip["pickup"],
             "destination": {
                 **trip["dropoff"],
-                "eta": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
             },
-            "pickup_estimate": max(0, trip["pickup_estimate"] - int(elapsed / 60)),
+            # Seconds remaining until driver reaches pickup; 0 once picked up.
+            "pickup_estimate": (
+                0 if status in ("in_progress", "completed", "rider_canceled")
+                else max(0, int(_T_IN_PROGRESS - elapsed))
+            ),
+            # Seconds remaining until dropoff; only meaningful during in_progress.
+            "dropoff_estimate": (
+                max(0, int(_T_COMPLETED - elapsed)) if status == "in_progress"
+                else 0
+            ),
             "surge_multiplier": 1.0,
         }
