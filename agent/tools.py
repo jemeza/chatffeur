@@ -738,5 +738,65 @@ def cancel_ride(
         )
 
 
+# ---------------------------------------------------------------------------
+# Tool 8 — web_search
+# ---------------------------------------------------------------------------
+
+
+@tool
+def web_search(
+    query: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """
+    Search the web for real-time information such as current addresses, business
+    hours, local events, points of interest, or anything that requires up-to-date
+    knowledge beyond the model's training data.
+
+    Args:
+        query: The search query string (e.g. 'JFK Airport terminal 4 address').
+    """
+    try:
+        from duckduckgo_search import DDGS
+
+        with DDGS() as ddgs:
+            raw = list(ddgs.text(query, max_results=5))
+
+        if not raw:
+            content = f"No results found for: {query!r}"
+            outcome = "no results"
+        else:
+            lines = [
+                f"**{r['title']}**\n{r['body']}\nSource: {r['href']}"
+                for r in raw
+            ]
+            content = "\n\n".join(lines)
+            outcome = f"returned {len(raw)} results"
+
+        log = make_log_entry(
+            "web_search",
+            requested={"query": query},
+            verified={},
+            executed={"engine": "duckduckgo", "max_results": 5},
+            outcome=outcome,
+        )
+    except Exception as exc:
+        content = f"Web search failed: {exc}"
+        log = make_log_entry(
+            "web_search",
+            requested={"query": query},
+            verified={},
+            executed={},
+            outcome=f"error: {exc}",
+        )
+
+    return Command(
+        update={
+            "action_log": [log],
+            "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
+        }
+    )
+
+
 ALL_TOOLS = [validate_address, set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride, cancel_ride]
+             set_guest_info, book_ride, track_ride, cancel_ride, web_search]
