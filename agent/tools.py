@@ -18,12 +18,14 @@ Adding a new platform (e.g. Lyft):
   — no other changes required.
 """
 
+import os
 from typing import Annotated
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
+from tavily import TavilyClient
 
 from adapters.uber_adapter import UberRideAdapter
 from adapters.mock_uber_client import UberGuestInfo
@@ -583,5 +585,49 @@ def track_ride(
         )
 
 
+@tool
+def web_search(
+    query: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """Search the web for ride availability or pricing in nearby locations.
+
+    Use this when surge pricing is active to find lower-cost pickup alternatives
+    in surrounding neighbourhoods or transit hubs.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content="Web search is unavailable: TAVILY_API_KEY is not set.",
+                        tool_call_id=tool_call_id,
+                    )
+                ]
+            }
+        )
+
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(query=query, max_results=5)
+        results = response.get("results", [])
+        if not results:
+            content = "No results found."
+        else:
+            lines = []
+            for r in results:
+                lines.append(f"**{r.get('title', 'Result')}**\n{r.get('content', '')}\nSource: {r.get('url', '')}")
+            content = "\n\n".join(lines)
+    except Exception as exc:
+        content = f"Web search error: {exc}"
+
+    return Command(
+        update={
+            "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)]
+        }
+    )
+
+
 ALL_TOOLS = [set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride]
+             set_guest_info, book_ride, track_ride, web_search]
