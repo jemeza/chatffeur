@@ -57,7 +57,9 @@ Email: john@email.com
 ## Cancelling a ride
 
 If the user asks to cancel after a ride has been booked, call `cancel_ride`.
-It will report any cancellation fee (a $5.00 fee applies if the driver is already on the way).
+It will report any cancellation fee. Please note:
+  - A $5.00 fee applies if the driver is arriving.
+  - Full trip fee will be applied if the driver has already picked up the user.
 After cancellation, inform the user of the outcome and offer to book a new ride if they wish.
 
 ## Rules you must never break
