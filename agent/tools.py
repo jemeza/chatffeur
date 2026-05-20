@@ -145,13 +145,21 @@ def search_rides(
         adapter = _get_adapter(platform)
         results = adapter.search_rides(pickup=pickup, dropoff=dropoff)
 
+        def _surge_tag(multiplier: float) -> str:
+            return f" 🔺 {multiplier}× surge" if multiplier > 1.0 else ""
+
         summary_lines = [
-            f"{i}. **{r['display_name']}** — {r['price_estimate']} "
+            f"{i}. **{r['display_name']}** — {r['price_estimate']}"
+            f"{_surge_tag(r.get('surge_multiplier', 1.0))} "
             f"(~{r['duration_estimate_minutes']} min, up to {r['capacity']} passengers)"
             for i, r in enumerate(results)
         ]
-        content = f"Found {len(results)} ride options:\n" + \
-            "\n".join(summary_lines)
+        surge_multiplier = results[0].get("surge_multiplier", 1.0) if results else 1.0
+        surge_note = (
+            f"\n\n⚠️ Surge pricing is active at **{surge_multiplier}×** the normal rate."
+            if surge_multiplier > 1.0 else ""
+        )
+        content = f"Found {len(results)} ride options:\n" + "\n".join(summary_lines) + surge_note
 
         log = make_log_entry(
             "search_rides",
