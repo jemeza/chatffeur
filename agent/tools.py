@@ -2,13 +2,14 @@
 Agent tools exposed to the LLM.
 
 Tool call flow:
-  1. set_platform      — pick the ride platform (default: uber)
-  2. search_rides      — discover options and prices
-  3. suggest_ride      — recommend one option; INTERRUPTS for user confirmation
-  4. set_guest_info    — collect rider name / email / phone before booking
-  5. book_ride         — executes only when state.ride_confirmed is True
-  6. track_ride        — poll live driver location and ETA after booking
-  7. cancel_ride       — cancel the active booking; reports any cancellation fee
+  1. set_platform           — pick the ride platform (default: uber)
+  2. search_rides           — discover options and prices
+  2b. find_pickup_locations — (optional) find nearby spots with lower surge
+  3. suggest_ride           — recommend one option; INTERRUPTS for user confirmation
+  4. set_guest_info         — collect rider name / email / phone before booking
+  5. book_ride              — executes only when state.ride_confirmed is True
+  6. track_ride             — poll live driver location and ETA after booking
+  7. cancel_ride            — cancel the active booking; reports any cancellation fee
 
 Each tool returns a Command that both updates AgentState fields and injects
 the ToolMessage (keyed by tool_call_id) that the LLM reads as the result.
@@ -19,6 +20,7 @@ Adding a new platform (e.g. Lyft):
   — no other changes required.
 """
 
+import math
 from typing import Annotated
 
 from langchain_core.messages import ToolMessage
@@ -26,6 +28,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
 
+from adapters.geocoder import geocode as _geocode
 from adapters.geocoder import validate_address as _mapbox_validate_address
 from adapters.uber_adapter import UberRideAdapter
 from adapters.mock_uber_client import UberGuestInfo
@@ -738,5 +741,210 @@ def cancel_ride(
         )
 
 
+# ---------------------------------------------------------------------------
+# Tool 8 — find_pickup_locations
+# ---------------------------------------------------------------------------
+
+
+@tool
+def find_pickup_locations(
+    location: str,
+    dropoff: str,
+    state: Annotated[AgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    radius_meters: int = 400,
+) -> Command:
+    """
+    Find nearby pickup (or drop-off) spots that may have lower surge pricing.
+
+    Use this when search_rides shows a surge multiplier above 1.0 and the user
+    wants alternatives within walking distance. Checks up to 9 candidate points
+    (the original location plus 8 compass directions at the requested radius)
+    and returns the top 5 ranked by surge multiplier, lowest first.
+
+    Args:
+        location:      The original pickup address to centre the search on.
+        dropoff:       The destination address (needed for accurate fare estimates).
+        radius_meters: How far from the original location to search (default 400 m,
+                       roughly a 5-minute walk).
+    """
+    platform = state.platform_adapter or "uber"
+
+    try:
+        # Geocode center pickup with a deterministic fallback for offline envs.
+        def _safe_geocode(address: str) -> tuple[float, float]:
+            try:
+                return _geocode(address)
+            except Exception:
+                seed = sum(ord(c) for c in address)
+                return (
+                    round(40.7128 + (seed % 1000) / 10000, 6),
+                    round(-74.0060 - (seed % 1000) / 10000, 6),
+                )
+
+        center_lat, center_lon = _safe_geocode(location)
+        drop_lat, drop_lon = _safe_geocode(dropoff)
+
+        dropoff_payload = {
+            "latitude": drop_lat,
+            "longitude": drop_lon,
+            "address": dropoff,
+        }
+
+        # Build candidate pickup points: original + 8 compass offsets.
+        # 1 degree lat ≈ 111,000 m; 1 degree lon ≈ 111,000 × cos(lat) m.
+        meters_per_deg_lat = 111_000
+        meters_per_deg_lon = 111_000 * math.cos(math.radians(center_lat))
+
+        directions = [
+            ("north", 0),
+            ("northeast", 45),
+            ("east", 90),
+            ("southeast", 135),
+            ("south", 180),
+            ("southwest", 225),
+            ("west", 270),
+            ("northwest", 315),
+        ]
+
+        candidates = [
+            {
+                "label": location,
+                "walk_meters": 0,
+                "lat": center_lat,
+                "lon": center_lon,
+                "is_original": True,
+            }
+        ]
+        for direction, bearing in directions:
+            rad = math.radians(bearing)
+            candidates.append(
+                {
+                    "label": f"~{radius_meters}m {direction} of {location}",
+                    "walk_meters": radius_meters,
+                    "lat": round(center_lat + (radius_meters * math.cos(rad)) / meters_per_deg_lat, 6),
+                    "lon": round(center_lon + (radius_meters * math.sin(rad)) / meters_per_deg_lon, 6),
+                    "is_original": False,
+                }
+            )
+
+        # Query estimates for each candidate via the adapter's mock client.
+        client = _get_adapter(platform)._client
+        evaluated: list[dict] = []
+        for candidate in candidates:
+            pickup_payload = {
+                "latitude": candidate["lat"],
+                "longitude": candidate["lon"],
+                "address": candidate["label"],
+            }
+            prices = client.get_estimates(pickup_payload, dropoff_payload).get("prices", [])
+            if not prices:
+                continue
+
+            # Surge is uniform across products within one estimate call.
+            surge = float(prices[0].get("fare", {}).get("surge_multiplier", 1.0))
+
+            # Use UberX as the reference price (cheapest standard option).
+            ref = next(
+                (p for p in prices if "UberX" in p.get("display_name", "") and not p.get("no_cars_available")),
+                prices[0],
+            )
+            fare = ref.get("fare", {})
+            low = float(fare.get("low_value", 0))
+            high = float(fare.get("high_value", 0))
+            price_display = fare.get("display") or f"${(low + high) / 2:.0f}"
+
+            evaluated.append(
+                {
+                    "label": candidate["label"],
+                    "walk_meters": candidate["walk_meters"],
+                    "surge_multiplier": surge,
+                    "price_display": price_display,
+                    "is_original": candidate["is_original"],
+                }
+            )
+
+        evaluated.sort(key=lambda r: (r["surge_multiplier"], r["walk_meters"]))
+
+        def _walk_time(meters: int) -> str:
+            if meters == 0:
+                return "current location"
+            return f"~{max(1, round(meters / 84))} min walk"  # 84 m/min ≈ 5 km/h
+
+        def _surge_label(multiplier: float) -> str:
+            return "no surge" if multiplier <= 1.0 else f"{multiplier}× surge"
+
+        lines = []
+        for i, r in enumerate(evaluated[:5]):
+            tag = " *(your location)*" if r["is_original"] else ""
+            lines.append(
+                f"{i + 1}. **{r['label']}**{tag}\n"
+                f"   Surge: {_surge_label(r['surge_multiplier'])} | "
+                f"UberX est.: {r['price_display']} | "
+                f"{_walk_time(r['walk_meters'])}"
+            )
+
+        no_surge = [r for r in evaluated[:5] if r["surge_multiplier"] <= 1.0]
+        if no_surge:
+            summary = (
+                f"Found **{len(no_surge)}** nearby spot(s) with no surge pricing "
+                f"within {radius_meters} m of {location}."
+            )
+        elif evaluated:
+            best = evaluated[0]
+            summary = (
+                f"Surge is active across the area. "
+                f"The best nearby option is **{best['label']}** at "
+                f"{best['surge_multiplier']}× — consider a larger radius or waiting "
+                f"a few minutes for demand to ease."
+            )
+        else:
+            summary = "No fare estimates available for nearby locations."
+
+        content = f"{summary}\n\n" + "\n".join(lines)
+
+        log = make_log_entry(
+            "find_pickup_locations",
+            requested={"location": location, "dropoff": dropoff, "radius_meters": radius_meters},
+            verified={"candidates_checked": len(evaluated)},
+            executed={
+                "platform": platform,
+                "best_surge": evaluated[0]["surge_multiplier"] if evaluated else None,
+            },
+            outcome=(
+                f"{len(no_surge)} no-surge options found out of {len(evaluated)} candidates"
+                if evaluated else "no estimates returned"
+            ),
+        )
+
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
+            }
+        )
+
+    except Exception as exc:
+        log = make_log_entry(
+            "find_pickup_locations",
+            requested={"location": location, "dropoff": dropoff, "radius_meters": radius_meters},
+            verified={},
+            executed={},
+            outcome=f"error: {exc}",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [
+                    ToolMessage(
+                        content=f"Error finding nearby pickup locations: {exc}",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
+
+
 ALL_TOOLS = [validate_address, set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride, cancel_ride]
+             set_guest_info, book_ride, track_ride, cancel_ride,
+             find_pickup_locations]
