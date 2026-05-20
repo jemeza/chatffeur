@@ -167,6 +167,7 @@ class MockUberGuestRidesClient:
         fare_id: str,
         pickup: dict,
         dropoff: dict,
+        price_estimate: str = "$0.00",
     ) -> dict:
         """Instantiate a mock trip and return its initial state."""
         request_id = f"mock-trip-{uuid.uuid4().hex[:16]}"
@@ -189,6 +190,7 @@ class MockUberGuestRidesClient:
             "pickup": pickup,
             "dropoff": dropoff,
             "fare_id": fare_id,
+            "price_estimate": price_estimate,
             "driver": driver,
             "vehicle": vehicle,
             "pickup_estimate": random.randint(3, 12),
@@ -231,12 +233,12 @@ class MockUberGuestRidesClient:
         elapsed = time.monotonic() - trip["created_at"]
         current_status = _pick_status(elapsed)
 
-        # No fee if cancelled before accepted; small fee once driver is heading over.
+        # No fee before accepted; $5 once driver is arriving; full trip price if in progress.
         cancellation_fee = "$0.00"
-        if current_status in ("arriving", "in_progress"):
+        if current_status == "arriving":
             cancellation_fee = "$5.00"
-        elif current_status == "accepted":
-            cancellation_fee = "$0.00"
+        elif current_status == "in_progress":
+            cancellation_fee = trip.get("price_estimate", "$0.00")
 
         trip["status"] = "rider_canceled"
         return {

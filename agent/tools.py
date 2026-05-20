@@ -8,6 +8,7 @@ Tool call flow:
   4. set_guest_info    — collect rider name / email / phone before booking
   5. book_ride         — executes only when state.ride_confirmed is True
   6. track_ride        — poll live driver location and ETA after booking
+  7. cancel_ride       — cancel the active booking; reports any cancellation fee
 
 Each tool returns a Command that both updates AgentState fields and injects
 the ToolMessage (keyed by tool_call_id) that the LLM reads as the result.
@@ -583,5 +584,92 @@ def track_ride(
         )
 
 
+# ---------------------------------------------------------------------------
+# Tool 7 — cancel_ride
+# ---------------------------------------------------------------------------
+
+
+@tool
+def cancel_ride(
+    state: Annotated[AgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """
+    Cancel the currently active booked ride.
+    Reports any cancellation fee that applies.
+    A fee of $5.00 may be charged if the driver is already on the way.
+    """
+    booked = state.booked_ride
+    platform = state.platform_adapter or "uber"
+
+    if not booked or not booked.get("ride_id"):
+        msg = "No active booking to cancel. Call book_ride first."
+        log = make_log_entry(
+            "cancel_ride",
+            requested={"platform": platform},
+            verified={"has_booking": False},
+            executed={},
+            outcome="error: no active booking",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+            }
+        )
+
+    ride_id = booked["ride_id"]
+
+    try:
+        adapter = _get_adapter(platform)
+        result = adapter.cancel_ride(ride_id)
+
+        fee = result.get("cancellation_fee", "$0.00")
+        fee_note = (
+            f"\n\n**Cancellation fee:** {fee}"
+            if fee != "$0.00"
+            else "\n\nNo cancellation fee was charged."
+        )
+        content = (
+            f"Ride `{ride_id}` has been cancelled successfully.{fee_note}"
+        )
+
+        log = make_log_entry(
+            "cancel_ride",
+            requested={"ride_id": ride_id, "platform": platform},
+            verified={"has_booking": True},
+            executed={"method": "cancel_ride", "ride_id": ride_id},
+            outcome=f"cancelled; fee={fee}",
+        )
+        return Command(
+            update={
+                "booked_ride": None,
+                "ride_confirmed": False,
+                "action_log": [log],
+                "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
+            }
+        )
+
+    except Exception as exc:
+        log = make_log_entry(
+            "cancel_ride",
+            requested={"ride_id": ride_id, "platform": platform},
+            verified={"has_booking": True},
+            executed={},
+            outcome=f"error: {exc}",
+        )
+        return Command(
+            update={
+                "action_log": [log],
+                "messages": [
+                    ToolMessage(
+                        content=f"Error cancelling ride: {exc}",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
+
+
 ALL_TOOLS = [set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride]
+             set_guest_info, book_ride, track_ride, cancel_ride]
