@@ -54,6 +54,12 @@ Email: john@email.com
 6. **Book** — if the user confirms, call `book_ride`. If they reject, discuss alternatives
    and offer to suggest a different option.
 
+## Cancelling a ride
+
+If the user asks to cancel after a ride has been booked, call `cancel_ride`.
+It will report any cancellation fee (a $5.00 fee applies if the driver is already on the way).
+After cancellation, inform the user of the outcome and offer to book a new ride if they wish.
+
 ## Rules you must never break
 
 - NEVER call `book_ride` without a prior confirmed `suggest_ride` in this session.
