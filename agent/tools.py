@@ -25,7 +25,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
-from tavily import TavilyClient
+import httpx
 
 from adapters.uber_adapter import UberRideAdapter
 from adapters.mock_uber_client import UberGuestInfo
@@ -585,23 +585,32 @@ def track_ride(
         )
 
 
+_MAPBOX_GEOCODING_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places/{query}.json"
+
+
 @tool
-def web_search(
+def search_nearby_locations(
     query: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-    """Search the web for ride availability or pricing in nearby locations.
+    """Search for nearby pickup locations using Mapbox.
 
-    Use this when surge pricing is active to find lower-cost pickup alternatives
-    in surrounding neighbourhoods or transit hubs.
+    Use this when surge pricing is active to find alternative pickup spots
+    (transit stations, landmarks, quieter intersections) close to the user's
+    current location that may have lower demand.
+
+    Args:
+        query: A plain-language search string, e.g.
+               "transit stations near Union Square San Francisco" or
+               "bus stops near downtown Chicago".
     """
-    api_key = os.environ.get("TAVILY_API_KEY")
-    if not api_key:
+    access_token = os.environ.get("MAPBOX_ACCESS_TOKEN")
+    if not access_token:
         return Command(
             update={
                 "messages": [
                     ToolMessage(
-                        content="Web search is unavailable: TAVILY_API_KEY is not set.",
+                        content="Location search is unavailable: MAPBOX_ACCESS_TOKEN is not set.",
                         tool_call_id=tool_call_id,
                     )
                 ]
@@ -609,18 +618,32 @@ def web_search(
         )
 
     try:
-        client = TavilyClient(api_key=api_key)
-        response = client.search(query=query, max_results=5)
-        results = response.get("results", [])
-        if not results:
-            content = "No results found."
+        import urllib.parse
+        encoded = urllib.parse.quote(query)
+        url = _MAPBOX_GEOCODING_URL.format(query=encoded)
+        resp = httpx.get(
+            url,
+            params={
+                "access_token": access_token,
+                "types": "poi,address,neighborhood",
+                "limit": 5,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if not features:
+            content = "No nearby locations found."
         else:
             lines = []
-            for r in results:
-                lines.append(f"**{r.get('title', 'Result')}**\n{r.get('content', '')}\nSource: {r.get('url', '')}")
-            content = "\n\n".join(lines)
+            for f in features:
+                name = f.get("place_name", "Unknown location")
+                coords = f.get("geometry", {}).get("coordinates", [])
+                coord_str = f"({coords[1]:.4f}, {coords[0]:.4f})" if len(coords) == 2 else ""
+                lines.append(f"- {name} {coord_str}".strip())
+            content = "Nearby locations:\n" + "\n".join(lines)
     except Exception as exc:
-        content = f"Web search error: {exc}"
+        content = f"Location search error: {exc}"
 
     return Command(
         update={
@@ -630,4 +653,4 @@ def web_search(
 
 
 ALL_TOOLS = [set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride, web_search]
+             set_guest_info, book_ride, track_ride, search_nearby_locations]
