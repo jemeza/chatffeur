@@ -18,12 +18,14 @@ Adding a new platform (e.g. Lyft):
   — no other changes required.
 """
 
+import os
 from typing import Annotated
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command, interrupt
+import httpx
 
 from adapters.uber_adapter import UberRideAdapter
 from adapters.mock_uber_client import UberGuestInfo
@@ -583,5 +585,72 @@ def track_ride(
         )
 
 
+_MAPBOX_GEOCODING_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places/{query}.json"
+
+
+@tool
+def search_nearby_locations(
+    query: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """Search for nearby pickup locations using Mapbox.
+
+    Use this when surge pricing is active to find alternative pickup spots
+    (transit stations, landmarks, quieter intersections) close to the user's
+    current location that may have lower demand.
+
+    Args:
+        query: A plain-language search string, e.g.
+               "transit stations near Union Square San Francisco" or
+               "bus stops near downtown Chicago".
+    """
+    access_token = os.environ.get("MAPBOX_ACCESS_TOKEN")
+    if not access_token:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content="Location search is unavailable: MAPBOX_ACCESS_TOKEN is not set.",
+                        tool_call_id=tool_call_id,
+                    )
+                ]
+            }
+        )
+
+    try:
+        import urllib.parse
+        encoded = urllib.parse.quote(query)
+        url = _MAPBOX_GEOCODING_URL.format(query=encoded)
+        resp = httpx.get(
+            url,
+            params={
+                "access_token": access_token,
+                "types": "poi,address,neighborhood",
+                "limit": 5,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if not features:
+            content = "No nearby locations found."
+        else:
+            lines = []
+            for f in features:
+                name = f.get("place_name", "Unknown location")
+                coords = f.get("geometry", {}).get("coordinates", [])
+                coord_str = f"({coords[1]:.4f}, {coords[0]:.4f})" if len(coords) == 2 else ""
+                lines.append(f"- {name} {coord_str}".strip())
+            content = "Nearby locations:\n" + "\n".join(lines)
+    except Exception as exc:
+        content = f"Location search error: {exc}"
+
+    return Command(
+        update={
+            "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)]
+        }
+    )
+
+
 ALL_TOOLS = [set_platform, search_rides, suggest_ride,
-             set_guest_info, book_ride, track_ride]
+             set_guest_info, book_ride, track_ride, search_nearby_locations]

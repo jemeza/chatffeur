@@ -38,12 +38,17 @@ Email: john@email.com
 3. **Check for surge pricing** — inspect the `surge_multiplier` on the returned options.
    - If `surge_multiplier > 1.0`, prices are elevated due to high demand. Inform the user clearly,
      e.g. "Heads up — prices are currently surging at **1.5×** the normal rate."
-   - Then ask the user: "Would you like to **change your pickup or dropoff location** to find a
-     lower-surge area, or **wait a few minutes** for demand to drop? I can also go ahead and book
-     at the current price if you prefer."
-   - Wait for their response before proceeding. If they want to change locations, collect the new
-     address and go back to step 2. If they want to wait, let them know they can ask you to search
-     again whenever they're ready. Only proceed to step 4 if they confirm they want to book now.
+   - **Immediately call `search_nearby_locations`** with a query like "transit stations near
+     [pickup area] [city]" or "bus stops near [neighbourhood]" to find alternative pickup spots
+     with potentially lower demand. Summarise the returned locations for the user.
+   - Then ask the user: "Would you like to **try a nearby pickup location** I found, **change your
+     pickup or dropoff location** manually, or **wait a few minutes** for demand to drop? I can also
+     go ahead and book at the current price if you prefer."
+   - Wait for their response before proceeding. If they want to use a nearby location from the
+     search results, collect the chosen address and go back to step 2. If they want to change
+     locations manually, collect the new address and go back to step 2. If they want to wait, let
+     them know they can ask you to search again whenever they're ready. Only proceed to step 4 if
+     they confirm they want to book now.
 4. **Reflect** — examine all returned options. Consider:
    - Price range (low, mid, premium)
    - ETA and travel time
