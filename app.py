@@ -203,6 +203,7 @@ def _render_tracking_panel():
     status = tracking.get("status", "unknown")
     driver = tracking.get("driver", {})
     eta = tracking.get("eta_seconds")
+    eta_dropoff = tracking.get("eta_dropoff_seconds")
 
     # Arrival notification — fire toast exactly once when status becomes "arriving"
     if status == "arriving" and not st.session_state.arrival_notified:
@@ -230,11 +231,12 @@ def _render_tracking_panel():
     c1, c2, c3 = st.columns(3)
     c1.metric("Status", _STATUS_LABELS.get(status, status.replace("_", " ").title()))
     c2.metric("Driver", driver.get("name", "—"))
-    picked_up = status in ("in_progress", "completed")
-    c3.metric(
-        "ETA to pickup",
-        "Picked up" if picked_up else (f"{eta}s" if eta else "Arriving"),
-    )
+    if status == "in_progress":
+        c3.metric("ETA to dropoff", f"{eta_dropoff}s" if eta_dropoff else "Arriving")
+    elif status == "completed":
+        c3.metric("ETA to dropoff", "Dropped off")
+    else:
+        c3.metric("ETA to pickup", f"{eta}s" if eta else "Arriving")
 
 
 # ---------------------------------------------------------------------------

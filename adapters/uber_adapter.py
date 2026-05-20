@@ -145,6 +145,7 @@ class UberRideAdapter(RidePlatformAdapter):
                 "bearing": location.get("bearing"),
             },
             "eta_seconds": trip.get("pickup_estimate", 0),
+            "eta_dropoff_seconds": trip.get("dropoff_estimate", 0),
             "driver": {
                 "name": driver.get("name", ""),
                 "rating": float(driver.get("rating") or 0),

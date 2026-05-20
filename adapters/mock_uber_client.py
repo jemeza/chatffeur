@@ -340,5 +340,10 @@ class MockUberGuestRidesClient:
                 0 if status in ("in_progress", "completed", "rider_canceled")
                 else max(0, int(_T_IN_PROGRESS - elapsed))
             ),
+            # Seconds remaining until dropoff; only meaningful during in_progress.
+            "dropoff_estimate": (
+                max(0, int(_T_COMPLETED - elapsed)) if status == "in_progress"
+                else 0
+            ),
             "surge_multiplier": 1.0,
         }
